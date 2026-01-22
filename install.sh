@@ -32,19 +32,23 @@ fi
 mkdir -p "$SOUNDS_DIR" "$BIN_DIR"
 [ "$PLATFORM" = "linux" ] && mkdir -p "$APPS_DIR"
 
-# Download audio
-echo "[1/2] Downloading audio..."
+# Download audio files
+echo "[1/2] Downloading audio files..."
 curl -sL "$REPO_URL/cursor-startup.wav" -o "$SOUNDS_DIR/cursor-startup.wav"
+curl -sL "$REPO_URL/cursor-shutdown.wav" -o "$SOUNDS_DIR/cursor-shutdown.wav"
 
 # Create wrapper script with fallback paths
 echo "[2/2] Creating wrapper..."
 if [ "$PLATFORM" = "linux" ]; then
     cat > "$BIN_DIR/cursor-with-sound" << 'EOF'
 #!/bin/bash
-# Play sound
-aplay ~/.local/share/sounds/cursor-startup.wav 2>/dev/null &
+SOUNDS_DIR="$HOME/.local/share/sounds"
+
+# Play startup sound
+aplay "$SOUNDS_DIR/cursor-startup.wav" 2>/dev/null &
 
 # Find Cursor executable (supports updates/path changes)
+CURSOR_BIN=""
 for path in \
     /usr/share/cursor/cursor \
     /usr/bin/cursor \
@@ -55,31 +59,52 @@ for path in \
     "$(which cursor 2>/dev/null)"
 do
     if [ -x "$path" ] && [ "$(realpath "$path" 2>/dev/null)" != "$(realpath "$0")" ]; then
-        exec "$path" "$@"
+        CURSOR_BIN="$path"
+        break
     fi
 done
 
-echo "Error: Cursor not found. Please reinstall Cursor."
-exit 1
+if [ -z "$CURSOR_BIN" ]; then
+    echo "Error: Cursor not found. Please reinstall Cursor."
+    exit 1
+fi
+
+# Run Cursor and wait for it to exit
+"$CURSOR_BIN" "$@"
+
+# Play shutdown sound
+aplay "$SOUNDS_DIR/cursor-shutdown.wav" 2>/dev/null
 EOF
 else
     cat > "$BIN_DIR/cursor-with-sound" << 'EOF'
 #!/bin/bash
-# Play sound
-afplay ~/Library/Sounds/cursor-startup.wav 2>/dev/null &
+SOUNDS_DIR="$HOME/Library/Sounds"
+
+# Play startup sound
+afplay "$SOUNDS_DIR/cursor-startup.wav" 2>/dev/null &
 
 # Find Cursor executable
+CURSOR_BIN=""
 for path in \
     "/Applications/Cursor.app/Contents/MacOS/Cursor" \
     "$HOME/Applications/Cursor.app/Contents/MacOS/Cursor"
 do
     if [ -x "$path" ]; then
-        exec "$path" "$@"
+        CURSOR_BIN="$path"
+        break
     fi
 done
 
-echo "Error: Cursor not found. Please reinstall Cursor."
-exit 1
+if [ -z "$CURSOR_BIN" ]; then
+    echo "Error: Cursor not found. Please reinstall Cursor."
+    exit 1
+fi
+
+# Run Cursor and wait for it to exit
+"$CURSOR_BIN" "$@"
+
+# Play shutdown sound
+afplay "$SOUNDS_DIR/cursor-shutdown.wav" 2>/dev/null
 EOF
 fi
 chmod +x "$BIN_DIR/cursor-with-sound"
@@ -102,7 +127,7 @@ Keywords=cursor;
 EOF
     update-desktop-database "$APPS_DIR" 2>/dev/null || true
     echo ""
-    echo "Done! Cursor will now play a sound when opened from the app menu."
+    echo "Done! Cursor will now play sounds when opened and closed."
 else
     echo ""
     echo "Done! To use, run: $BIN_DIR/cursor-with-sound"

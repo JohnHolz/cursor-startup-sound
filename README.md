@@ -1,6 +1,6 @@
 # Cursor Startup Sound 🔊
 
-Play a startup sound every time you open [Cursor](https://cursor.com) editor.
+Play startup and shutdown sounds when opening and closing [Cursor](https://cursor.com) editor.
 
 ## Install
 
@@ -22,7 +22,7 @@ irm https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main/install
 <summary>Linux</summary>
 
 ```bash
-rm -f ~/.local/share/sounds/cursor-startup.wav ~/.local/bin/cursor-with-sound ~/.local/share/applications/cursor.desktop
+rm -f ~/.local/share/sounds/cursor-startup.wav ~/.local/share/sounds/cursor-shutdown.wav ~/.local/bin/cursor-with-sound ~/.local/share/applications/cursor.desktop
 ```
 </details>
 
@@ -30,7 +30,7 @@ rm -f ~/.local/share/sounds/cursor-startup.wav ~/.local/bin/cursor-with-sound ~/
 <summary>macOS</summary>
 
 ```bash
-rm -f ~/Library/Sounds/cursor-startup.wav ~/.local/bin/cursor-with-sound
+rm -f ~/Library/Sounds/cursor-startup.wav ~/Library/Sounds/cursor-shutdown.wav ~/.local/bin/cursor-with-sound
 ```
 </details>
 

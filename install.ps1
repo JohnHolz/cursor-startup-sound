@@ -25,18 +25,19 @@ if (-not (Test-Path $CURSOR_PATH)) {
 # Create directory
 New-Item -ItemType Directory -Force -Path $SOUNDS_DIR | Out-Null
 
-# Download audio
-Write-Host "[1/2] Downloading audio..."
-$audioPath = "$SOUNDS_DIR\cursor-startup.wav"
-Invoke-WebRequest -Uri "$REPO_URL/cursor-startup.wav" -OutFile $audioPath
+# Download audio files
+Write-Host "[1/2] Downloading audio files..."
+Invoke-WebRequest -Uri "$REPO_URL/cursor-startup.wav" -OutFile "$SOUNDS_DIR\cursor-startup.wav"
+Invoke-WebRequest -Uri "$REPO_URL/cursor-shutdown.wav" -OutFile "$SOUNDS_DIR\cursor-shutdown.wav"
 
 # Create wrapper script
 Write-Host "[2/2] Creating wrapper..."
 $wrapperPath = "$SOUNDS_DIR\cursor-with-sound.bat"
 $wrapperContent = @"
 @echo off
-start /b powershell -WindowStyle Hidden -Command "(New-Object Media.SoundPlayer '$audioPath').PlaySync()"
-start "" "$CURSOR_PATH" %*
+start /b powershell -WindowStyle Hidden -Command "(New-Object Media.SoundPlayer '$SOUNDS_DIR\cursor-startup.wav').PlaySync()"
+"$CURSOR_PATH" %*
+powershell -WindowStyle Hidden -Command "(New-Object Media.SoundPlayer '$SOUNDS_DIR\cursor-shutdown.wav').PlaySync()"
 "@
 Set-Content -Path $wrapperPath -Value $wrapperContent
 
@@ -51,4 +52,6 @@ Write-Host ""
 Write-Host "Done!" -ForegroundColor Green
 Write-Host ""
 Write-Host "A shortcut 'Cursor (with sound)' was created on your Desktop."
+Write-Host "Cursor will now play sounds when opened and closed."
+Write-Host ""
 Write-Host "To pin to taskbar, right-click the shortcut and select 'Pin to taskbar'"

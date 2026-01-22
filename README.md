@@ -1,6 +1,9 @@
 # Cursor Startup Sound 🔊
 
-Play startup and shutdown sounds when opening and closing [Cursor](https://cursor.com) editor.
+Play sounds when using [Cursor](https://cursor.com) editor:
+- **Startup sound** - when opening Cursor
+- **Shutdown sound** - when closing Cursor
+- **Send sound** - when sending a message to AI
 
 ## Install
 
@@ -15,6 +18,8 @@ curl -fsSL https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main/
 ```powershell
 irm https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main/install.ps1 | iex
 ```
+
+> **Note:** Restart Cursor after installation to activate the send sound hook.
 
 ## Update
 
@@ -33,6 +38,11 @@ curl -fsSL https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main/
 ```powershell
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main/install.ps1))) --uninstall
 ```
+
+## How it works
+
+- **Startup/Shutdown**: Uses a wrapper script that plays sounds before/after launching Cursor
+- **Send sound**: Uses [Cursor Hooks](https://cursor.com/docs/agent/hooks) (`beforeSubmitPrompt` event)
 
 ## License
 

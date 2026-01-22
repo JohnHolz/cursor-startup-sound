@@ -3,7 +3,7 @@
 # https://github.com/JohnHolz/cursor-startup-sound
 set -e
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 REPO_URL="https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main"
 
 # Detect OS
@@ -20,21 +20,29 @@ if [ "$PLATFORM" = "linux" ]; then
     BIN_DIR="$HOME/.local/bin"
     APPS_DIR="$HOME/.local/share/applications"
     CONFIG_DIR="$HOME/.config/cursor-startup-sound"
+    CURSOR_HOOKS_DIR="$HOME/.cursor/hooks"
     PLAY_CMD="aplay"
 else
     SOUNDS_DIR="$HOME/Library/Sounds"
     BIN_DIR="$HOME/.local/bin"
     CONFIG_DIR="$HOME/.config/cursor-startup-sound"
+    CURSOR_HOOKS_DIR="$HOME/.cursor/hooks"
     PLAY_CMD="afplay"
 fi
 
 # Check for uninstall flag
 if [ "$1" = "--uninstall" ] || [ "$1" = "-u" ]; then
     echo "Uninstalling Cursor Startup Sound..."
-    rm -f "$SOUNDS_DIR/cursor-startup.wav" "$SOUNDS_DIR/cursor-shutdown.wav"
+    rm -f "$SOUNDS_DIR/cursor-startup.wav" "$SOUNDS_DIR/cursor-shutdown.wav" "$SOUNDS_DIR/cursor-send.wav"
     rm -f "$BIN_DIR/cursor-with-sound"
+    rm -f "$CURSOR_HOOKS_DIR/play-send-sound.sh"
     rm -rf "$CONFIG_DIR"
     [ "$PLATFORM" = "linux" ] && rm -f "$APPS_DIR/cursor.desktop"
+    # Remove hook from hooks.json if it exists
+    if [ -f "$HOME/.cursor/hooks.json" ]; then
+        # Simple removal - user may need to clean up manually if they have other hooks
+        echo "Note: You may need to manually edit ~/.cursor/hooks.json to remove the beforeSubmitPrompt hook"
+    fi
     echo "Done!"
     exit 0
 fi
@@ -51,16 +59,17 @@ echo "$ACTION for $PLATFORM"
 echo ""
 
 # Create directories
-mkdir -p "$SOUNDS_DIR" "$BIN_DIR" "$CONFIG_DIR"
+mkdir -p "$SOUNDS_DIR" "$BIN_DIR" "$CONFIG_DIR" "$CURSOR_HOOKS_DIR"
 [ "$PLATFORM" = "linux" ] && mkdir -p "$APPS_DIR"
 
 # Download audio files
-echo "[1/3] Downloading audio files..."
+echo "[1/4] Downloading audio files..."
 curl -sL "$REPO_URL/cursor-startup.wav" -o "$SOUNDS_DIR/cursor-startup.wav"
 curl -sL "$REPO_URL/cursor-shutdown.wav" -o "$SOUNDS_DIR/cursor-shutdown.wav"
+curl -sL "$REPO_URL/cursor-send.wav" -o "$SOUNDS_DIR/cursor-send.wav"
 
 # Create wrapper script with fallback paths
-echo "[2/3] Creating wrapper..."
+echo "[2/4] Creating wrapper..."
 if [ "$PLATFORM" = "linux" ]; then
     cat > "$BIN_DIR/cursor-with-sound" << 'EOF'
 #!/bin/bash
@@ -131,11 +140,44 @@ EOF
 fi
 chmod +x "$BIN_DIR/cursor-with-sound"
 
+# Create hook script for send sound
+echo "[3/4] Configuring send sound hook..."
+cat > "$CURSOR_HOOKS_DIR/play-send-sound.sh" << EOF
+#!/bin/bash
+# Plays sound when sending message to AI
+$PLAY_CMD "$SOUNDS_DIR/cursor-send.wav" 2>/dev/null &
+echo '{"continue": true}'
+EOF
+chmod +x "$CURSOR_HOOKS_DIR/play-send-sound.sh"
+
+# Create or update hooks.json
+HOOKS_FILE="$HOME/.cursor/hooks.json"
+if [ ! -f "$HOOKS_FILE" ]; then
+    cat > "$HOOKS_FILE" << EOF
+{
+  "version": 1,
+  "hooks": {
+    "beforeSubmitPrompt": [
+      {
+        "command": "$CURSOR_HOOKS_DIR/play-send-sound.sh"
+      }
+    ]
+  }
+}
+EOF
+else
+    # Check if our hook is already there
+    if ! grep -q "play-send-sound.sh" "$HOOKS_FILE"; then
+        echo "Note: ~/.cursor/hooks.json exists. Please add manually:"
+        echo "  \"beforeSubmitPrompt\": [{\"command\": \"$CURSOR_HOOKS_DIR/play-send-sound.sh\"}]"
+    fi
+fi
+
 # Save version
 echo "$VERSION" > "$CONFIG_DIR/version"
 
 # Platform-specific integration
-echo "[3/3] Configuring system..."
+echo "[4/4] Configuring system..."
 if [ "$PLATFORM" = "linux" ]; then
     cat > "$APPS_DIR/cursor.desktop" << EOF
 [Desktop Entry]
@@ -155,7 +197,12 @@ EOF
 fi
 
 echo ""
-echo "Done! Cursor will now play sounds when opened and closed."
+echo "Done! Cursor sounds configured:"
+echo "  - Startup sound (when opening)"
+echo "  - Shutdown sound (when closing)"
+echo "  - Send sound (when sending message to AI)"
+echo ""
+echo "Note: Restart Cursor to activate the send sound hook."
 echo ""
 echo "Commands:"
 echo "  Update:    curl -fsSL $REPO_URL/install.sh | bash"

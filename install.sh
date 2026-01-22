@@ -21,12 +21,10 @@ if [ "$PLATFORM" = "linux" ]; then
     SOUNDS_DIR="$HOME/.local/share/sounds"
     BIN_DIR="$HOME/.local/bin"
     APPS_DIR="$HOME/.local/share/applications"
-    CURSOR_PATH="/usr/share/cursor/cursor"
     PLAY_CMD="aplay"
 else
     SOUNDS_DIR="$HOME/Library/Sounds"
     BIN_DIR="$HOME/.local/bin"
-    CURSOR_PATH="/Applications/Cursor.app/Contents/MacOS/Cursor"
     PLAY_CMD="afplay"
 fi
 
@@ -38,13 +36,52 @@ mkdir -p "$SOUNDS_DIR" "$BIN_DIR"
 echo "[1/2] Downloading audio..."
 curl -sL "$REPO_URL/cursor-startup.wav" -o "$SOUNDS_DIR/cursor-startup.wav"
 
-# Create wrapper script
+# Create wrapper script with fallback paths
 echo "[2/2] Creating wrapper..."
-cat > "$BIN_DIR/cursor-with-sound" << EOF
+if [ "$PLATFORM" = "linux" ]; then
+    cat > "$BIN_DIR/cursor-with-sound" << 'EOF'
 #!/bin/bash
-$PLAY_CMD "$SOUNDS_DIR/cursor-startup.wav" 2>/dev/null &
-exec "$CURSOR_PATH" "\$@"
+# Play sound
+aplay ~/.local/share/sounds/cursor-startup.wav 2>/dev/null &
+
+# Find Cursor executable (supports updates/path changes)
+for path in \
+    /usr/share/cursor/cursor \
+    /usr/bin/cursor \
+    /opt/cursor/cursor \
+    /opt/Cursor/cursor \
+    "$HOME/.local/bin/cursor" \
+    "$HOME/Applications/cursor" \
+    "$(which cursor 2>/dev/null)"
+do
+    if [ -x "$path" ] && [ "$(realpath "$path" 2>/dev/null)" != "$(realpath "$0")" ]; then
+        exec "$path" "$@"
+    fi
+done
+
+echo "Error: Cursor not found. Please reinstall Cursor."
+exit 1
 EOF
+else
+    cat > "$BIN_DIR/cursor-with-sound" << 'EOF'
+#!/bin/bash
+# Play sound
+afplay ~/Library/Sounds/cursor-startup.wav 2>/dev/null &
+
+# Find Cursor executable
+for path in \
+    "/Applications/Cursor.app/Contents/MacOS/Cursor" \
+    "$HOME/Applications/Cursor.app/Contents/MacOS/Cursor"
+do
+    if [ -x "$path" ]; then
+        exec "$path" "$@"
+    fi
+done
+
+echo "Error: Cursor not found. Please reinstall Cursor."
+exit 1
+EOF
+fi
 chmod +x "$BIN_DIR/cursor-with-sound"
 
 # Platform-specific integration

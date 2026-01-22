@@ -10,37 +10,29 @@ Play startup and shutdown sounds when opening and closing [Cursor](https://curso
 curl -fsSL https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main/install.sh | bash
 ```
 
-### Windows
+### Windows (PowerShell)
 
 ```powershell
 irm https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main/install.ps1 | iex
 ```
 
+## Update
+
+Run the same install command again - it will automatically update to the latest version.
+
 ## Uninstall
 
-<details>
-<summary>Linux</summary>
+### Linux / macOS
 
 ```bash
-rm -f ~/.local/share/sounds/cursor-startup.wav ~/.local/share/sounds/cursor-shutdown.wav ~/.local/bin/cursor-with-sound ~/.local/share/applications/cursor.desktop
+curl -fsSL https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main/install.sh | bash -s -- --uninstall
 ```
-</details>
 
-<details>
-<summary>macOS</summary>
-
-```bash
-rm -f ~/Library/Sounds/cursor-startup.wav ~/Library/Sounds/cursor-shutdown.wav ~/.local/bin/cursor-with-sound
-```
-</details>
-
-<details>
-<summary>Windows</summary>
+### Windows (PowerShell)
 
 ```powershell
-Remove-Item -Recurse "$env:LOCALAPPDATA\CursorStartupSound"; Remove-Item "$env:USERPROFILE\Desktop\Cursor (with sound).lnk"
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main/install.ps1))) --uninstall
 ```
-</details>
 
 ## License
 

@@ -3,9 +3,7 @@
 
 $ErrorActionPreference = "Stop"
 
-$YOUTUBE_URL = "https://www.youtube.com/watch?v=EWMQI8dIP-4"
-$AUDIO_START = 17.5
-$AUDIO_DURATION = 1.1
+$REPO_URL = "https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main"
 
 Write-Host "=== Cursor Startup Sound Installer ===" -ForegroundColor Cyan
 Write-Host "Platform: Windows"
@@ -24,52 +22,23 @@ if (-not (Test-Path $CURSOR_PATH)) {
     exit 1
 }
 
-# Create directories
+# Create directory
 New-Item -ItemType Directory -Force -Path $SOUNDS_DIR | Out-Null
 
-# Check for ffmpeg
-Write-Host "[1/5] Checking dependencies..."
-if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
-    Write-Host "Error: ffmpeg not found. Please install it first:" -ForegroundColor Red
-    Write-Host "  winget install ffmpeg"
-    Write-Host "  or download from: https://ffmpeg.org/download.html"
-    exit 1
-}
-
-# Download yt-dlp
-Write-Host "[2/5] Downloading yt-dlp..."
-$ytdlpPath = "$SOUNDS_DIR\yt-dlp.exe"
-Invoke-WebRequest -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" -OutFile $ytdlpPath
-
 # Download audio
-Write-Host "[3/5] Downloading audio from YouTube..."
-$tempAudio = "$env:TEMP\cursor-sound-full.wav"
-& $ytdlpPath -q -x --audio-format wav -o "$env:TEMP\cursor-sound-full.%(ext)s" $YOUTUBE_URL
+Write-Host "[1/2] Downloading audio..."
+$audioPath = "$SOUNDS_DIR\cursor-startup.wav"
+Invoke-WebRequest -Uri "$REPO_URL/cursor-startup.wav" -OutFile $audioPath
 
-# Cut audio
-Write-Host "[4/5] Processing audio..."
-$outputAudio = "$SOUNDS_DIR\cursor-startup.wav"
-& ffmpeg -y -i $tempAudio -ss $AUDIO_START -t $AUDIO_DURATION $outputAudio 2>$null
-Remove-Item $tempAudio -ErrorAction SilentlyContinue
-
-# Create wrapper script (batch file)
-Write-Host "[5/5] Creating wrapper..."
+# Create wrapper script
+Write-Host "[2/2] Creating wrapper..."
 $wrapperPath = "$SOUNDS_DIR\cursor-with-sound.bat"
 $wrapperContent = @"
 @echo off
-start /b powershell -WindowStyle Hidden -Command "(New-Object Media.SoundPlayer '$outputAudio').PlaySync()"
+start /b powershell -WindowStyle Hidden -Command "(New-Object Media.SoundPlayer '$audioPath').PlaySync()"
 start "" "$CURSOR_PATH" %*
 "@
 Set-Content -Path $wrapperPath -Value $wrapperContent
-
-# Create PowerShell wrapper (alternative)
-$psWrapperPath = "$SOUNDS_DIR\cursor-with-sound.ps1"
-$psWrapperContent = @"
-`$sound = New-Object Media.SoundPlayer "$outputAudio"
-`$sound.Play()
-Start-Process "$CURSOR_PATH" -ArgumentList `$args
-"@
-Set-Content -Path $psWrapperPath -Value $psWrapperContent
 
 # Create shortcut on Desktop
 $WshShell = New-Object -ComObject WScript.Shell
@@ -82,9 +51,4 @@ Write-Host ""
 Write-Host "Done!" -ForegroundColor Green
 Write-Host ""
 Write-Host "A shortcut 'Cursor (with sound)' was created on your Desktop."
-Write-Host ""
-Write-Host "Files created:"
-Write-Host "  Audio: $outputAudio"
-Write-Host "  Wrapper: $wrapperPath"
-Write-Host ""
-Write-Host "To pin to taskbar, right-click the desktop shortcut and select 'Pin to taskbar'"
+Write-Host "To pin to taskbar, right-click the shortcut and select 'Pin to taskbar'"

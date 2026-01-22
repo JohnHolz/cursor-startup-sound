@@ -10,15 +10,11 @@ Play a startup sound every time you open [Cursor](https://cursor.com) editor.
 curl -fsSL https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main/install.sh | bash
 ```
 
-> **Requires:** `ffmpeg` - Install with `sudo apt install ffmpeg` (Linux) or `brew install ffmpeg` (macOS)
-
 ### Windows
 
 ```powershell
 irm https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main/install.ps1 | iex
 ```
-
-> **Requires:** `ffmpeg` - Install with `winget install ffmpeg`
 
 ## Uninstall
 

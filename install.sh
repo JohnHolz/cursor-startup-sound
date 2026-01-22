@@ -2,9 +2,7 @@
 # Cursor Startup Sound - Cross-platform installer (Linux/macOS)
 set -e
 
-YOUTUBE_URL="https://www.youtube.com/watch?v=EWMQI8dIP-4"
-AUDIO_START=17.5
-AUDIO_DURATION=1.1
+REPO_URL="https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main"
 
 # Detect OS
 OS="$(uname -s)"
@@ -36,35 +34,12 @@ fi
 mkdir -p "$SOUNDS_DIR" "$BIN_DIR"
 [ "$PLATFORM" = "linux" ] && mkdir -p "$APPS_DIR"
 
-# Check dependencies
-echo "[1/5] Checking dependencies..."
-if ! command -v ffmpeg &>/dev/null; then
-    echo "Error: ffmpeg not found. Please install it first:"
-    [ "$PLATFORM" = "linux" ] && echo "  sudo apt install ffmpeg"
-    [ "$PLATFORM" = "macos" ] && echo "  brew install ffmpeg"
-    exit 1
-fi
-
-# Download yt-dlp
-echo "[2/5] Downloading yt-dlp..."
-if [ "$PLATFORM" = "macos" ]; then
-    curl -sL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos -o "$BIN_DIR/yt-dlp"
-else
-    curl -sL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o "$BIN_DIR/yt-dlp"
-fi
-chmod +x "$BIN_DIR/yt-dlp"
-
 # Download audio
-echo "[3/5] Downloading audio from YouTube..."
-"$BIN_DIR/yt-dlp" -q -x --audio-format wav -o "/tmp/cursor-sound-full.%(ext)s" "$YOUTUBE_URL"
-
-# Cut audio
-echo "[4/5] Processing audio..."
-ffmpeg -y -i /tmp/cursor-sound-full.wav -ss "$AUDIO_START" -t "$AUDIO_DURATION" "$SOUNDS_DIR/cursor-startup.wav" 2>/dev/null
-rm -f /tmp/cursor-sound-full.wav
+echo "[1/2] Downloading audio..."
+curl -sL "$REPO_URL/cursor-startup.wav" -o "$SOUNDS_DIR/cursor-startup.wav"
 
 # Create wrapper script
-echo "[5/5] Creating wrapper..."
+echo "[2/2] Creating wrapper..."
 cat > "$BIN_DIR/cursor-with-sound" << EOF
 #!/bin/bash
 $PLAY_CMD "$SOUNDS_DIR/cursor-startup.wav" 2>/dev/null &
@@ -95,7 +70,7 @@ else
     echo ""
     echo "Done! To use, run: $BIN_DIR/cursor-with-sound"
     echo ""
-    echo "To replace the default Cursor app, run:"
+    echo "To replace the default Cursor command, run:"
     echo "  sudo ln -sf $BIN_DIR/cursor-with-sound /usr/local/bin/cursor"
 fi
 

@@ -145,6 +145,7 @@ echo "[3/4] Configuring send sound hook..."
 cat > "$CURSOR_HOOKS_DIR/play-send-sound.sh" << EOF
 #!/bin/bash
 # Plays sound when sending message to AI
+cat > /dev/null  # Read stdin (required by Cursor)
 $PLAY_CMD "$SOUNDS_DIR/cursor-send.wav" 2>/dev/null &
 echo '{"continue": true}'
 EOF

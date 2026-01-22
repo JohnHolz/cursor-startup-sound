@@ -72,6 +72,7 @@ Write-Host "[3/4] Configuring send sound hook..."
 $hookScript = "$CURSOR_HOOKS_DIR\play-send-sound.ps1"
 $hookContent = @"
 # Plays sound when sending message to AI
+`$null = `$input | Out-Null  # Read stdin (required by Cursor)
 `$player = New-Object Media.SoundPlayer "$SOUNDS_DIR\cursor-send.wav"
 `$player.Play()
 Write-Output '{"continue": true}'

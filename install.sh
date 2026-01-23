@@ -3,7 +3,7 @@
 # https://github.com/JohnHolz/cursor-startup-sound
 set -e
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 REPO_URL="https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main"
 
 # Detect OS
@@ -37,7 +37,12 @@ if [ "$1" = "--uninstall" ] || [ "$1" = "-u" ]; then
     rm -f "$BIN_DIR/cursor-with-sound"
     rm -f "$CURSOR_HOOKS_DIR/play-send-sound.sh"
     rm -rf "$CONFIG_DIR"
-    [ "$PLATFORM" = "linux" ] && rm -f "$APPS_DIR/cursor.desktop"
+    if [ "$PLATFORM" = "linux" ]; then
+        rm -f "$APPS_DIR/cursor.desktop"
+    else
+        # Remove macOS wrapper app
+        rm -rf "$HOME/Applications/Cursor with Sound.app"
+    fi
     # Remove hook from hooks.json if it exists
     if [ -f "$HOME/.cursor/hooks.json" ]; then
         # Simple removal - user may need to clean up manually if they have other hooks
@@ -60,7 +65,11 @@ echo ""
 
 # Create directories
 mkdir -p "$SOUNDS_DIR" "$BIN_DIR" "$CONFIG_DIR" "$CURSOR_HOOKS_DIR"
-[ "$PLATFORM" = "linux" ] && mkdir -p "$APPS_DIR"
+if [ "$PLATFORM" = "linux" ]; then
+    mkdir -p "$APPS_DIR"
+else
+    mkdir -p "$HOME/Applications"
+fi
 
 # Download audio files
 echo "[1/4] Downloading audio files..."
@@ -195,6 +204,95 @@ MimeType=application/x-cursor-workspace;
 Keywords=cursor;
 EOF
     update-desktop-database "$APPS_DIR" 2>/dev/null || true
+else
+    # macOS: Create wrapper .app bundle
+    WRAPPER_APP="$HOME/Applications/Cursor with Sound.app"
+    mkdir -p "$WRAPPER_APP/Contents/MacOS"
+    mkdir -p "$WRAPPER_APP/Contents/Resources"
+
+    # Find original Cursor.app to copy icon
+    ORIGINAL_APP=""
+    for app_path in "/Applications/Cursor.app" "$HOME/Applications/Cursor.app"; do
+        if [ -d "$app_path" ]; then
+            ORIGINAL_APP="$app_path"
+            break
+        fi
+    done
+
+    # Copy icon from original Cursor.app
+    if [ -n "$ORIGINAL_APP" ] && [ -f "$ORIGINAL_APP/Contents/Resources/Cursor.icns" ]; then
+        cp "$ORIGINAL_APP/Contents/Resources/Cursor.icns" "$WRAPPER_APP/Contents/Resources/AppIcon.icns"
+    fi
+
+    # Create Info.plist
+    cat > "$WRAPPER_APP/Contents/Info.plist" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>launcher</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.cursor-startup-sound.wrapper</string>
+    <key>CFBundleName</key>
+    <string>Cursor with Sound</string>
+    <key>CFBundleDisplayName</key>
+    <string>Cursor with Sound</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleVersion</key>
+    <string>1.2.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.2.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>10.13</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>
+EOF
+
+    # Create launcher script
+    cat > "$WRAPPER_APP/Contents/MacOS/launcher" << 'EOF'
+#!/bin/bash
+SOUNDS_DIR="$HOME/Library/Sounds"
+
+# Play startup sound
+afplay "$SOUNDS_DIR/cursor-startup.wav" 2>/dev/null &
+
+# Find Cursor executable
+CURSOR_BIN=""
+for path in \
+    "/Applications/Cursor.app/Contents/MacOS/Cursor" \
+    "$HOME/Applications/Cursor.app/Contents/MacOS/Cursor"
+do
+    if [ -x "$path" ]; then
+        CURSOR_BIN="$path"
+        break
+    fi
+done
+
+if [ -z "$CURSOR_BIN" ]; then
+    osascript -e 'display dialog "Cursor not found. Please install Cursor first." buttons {"OK"} default button "OK" with icon stop'
+    exit 1
+fi
+
+# Run Cursor and wait for it to exit
+"$CURSOR_BIN" "$@"
+
+# Play shutdown sound
+afplay "$SOUNDS_DIR/cursor-shutdown.wav" 2>/dev/null
+EOF
+    chmod +x "$WRAPPER_APP/Contents/MacOS/launcher"
+
+    # Touch the app to update Finder/Spotlight
+    touch "$WRAPPER_APP"
+
+    echo ""
+    echo "macOS app created: ~/Applications/Cursor with Sound.app"
+    echo "You can drag it to your Dock for easy access!"
 fi
 
 echo ""

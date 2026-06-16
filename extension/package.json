@@ -1,0 +1,85 @@
+{
+  "name": "wc3-sounds",
+  "displayName": "WC3 Sounds (Startup / Shutdown / Send)",
+  "description": "Warcraft-3-style Peasant/Peon voices on editor startup, shutdown, and AI send. Works in VS Code and Cursor.",
+  "version": "2.0.0",
+  "publisher": "johnholz",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JohnHolz/cursor-startup-sound.git"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "sound",
+    "audio",
+    "warcraft",
+    "startup",
+    "fun"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "wc3Sounds.playSend",
+        "title": "WC3 Sounds: Play Send Sound"
+      },
+      {
+        "command": "wc3Sounds.playStartup",
+        "title": "WC3 Sounds: Play Startup Sound (test)"
+      },
+      {
+        "command": "wc3Sounds.playShutdown",
+        "title": "WC3 Sounds: Play Shutdown Sound (test)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "wc3Sounds.playSend",
+        "key": "ctrl+enter",
+        "when": "inChat && config.wc3Sounds.enableSend"
+      }
+    ],
+    "configuration": {
+      "title": "WC3 Sounds",
+      "properties": {
+        "wc3Sounds.theme": {
+          "type": "string",
+          "enum": [
+            "human",
+            "orc"
+          ],
+          "enumDescriptions": [
+            "Human Peasant: \"Ready to work!\" / \"Yes?\" / \"Job's done\"",
+            "Orc Peon: \"Ready to work!\" / \"What you want?\" / \"Work complete!\""
+          ],
+          "default": "human",
+          "description": "Which sound theme to play."
+        },
+        "wc3Sounds.enableStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "Play a sound when the editor starts."
+        },
+        "wc3Sounds.enableShutdown": {
+          "type": "boolean",
+          "default": true,
+          "description": "Play a sound when the editor / window closes."
+        },
+        "wc3Sounds.enableSend": {
+          "type": "boolean",
+          "default": false,
+          "description": "Play a sound on the send command/keybinding (VS Code only; on Cursor and Claude Code use the hook installer instead — there is no public API to detect AI chat submit)."
+        }
+      }
+    }
+  }
+}

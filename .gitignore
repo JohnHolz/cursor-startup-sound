@@ -1,0 +1,11 @@
+# Secrets — never commit
+.env
+.env.*
+*.local
+secrets/
+
+# Node / extension tooling
+node_modules/
+
+# OS junk
+.DS_Store

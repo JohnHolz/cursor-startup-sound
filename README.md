@@ -9,7 +9,7 @@ Pick your faction:
 | `human` | Peasant | *"Ready to work!"* | *"Yes?"* | *"Job's done"* |
 | `orc`   | Peon    | *"Ready to work!"* | *"What you want?"* | *"Work complete!"* |
 
-**Bonus (Claude Code only):** a **Barony gnome** squeaks — one of 12 random clips — every time Claude finishes a
+**Bonus (Claude Code only):** a **Barony gnome** squeaks — one of 8 random clips — every time Claude finishes a
 step (each block of progress text), saves a memory, writes a plan, edits `CLAUDE.md`, or compacts context.
 Opt out with `--no-gnome`.
 
@@ -94,7 +94,8 @@ The uninstaller removes our hooks from `~/.claude/settings.json` **without touch
   (fires per batch of streamed lines; the script only reacts to the `final` flush, so one clip per assistant
   message), `PostToolUse` for `Write|Edit|MultiEdit` (only when the file is under
   `~/.claude/projects/*/memory/`, `~/.claude/plans/`, or is a `CLAUDE.md`), and `PreCompact`. It picks one of
-  12 clips at random; a 2 s debounce keeps clips from piling up.
+  8 clips at random (the gnome's idle and "spotted you" voices; its death screams are left out); a 3 s cooldown,
+  longer than the longest clip, keeps two clips from ever overlapping.
 - **Audio players** — `afplay` (macOS), `paplay`/`aplay` (Linux), `Media.SoundPlayer` (Windows).
 
 ## Requirements

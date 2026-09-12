@@ -10,6 +10,7 @@ $ErrorActionPreference = "Stop"
 $VERSION     = "2.1.0"
 $EXT_VERSION = "2.0.0"   # VS Code extension (.vsix) version; bumped separately when extension/ changes
 $REPO_URL    = if ($env:WC3_REPO_URL) { $env:WC3_REPO_URL } else { "https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main" }
+$GNOME_CLIPS = 8         # sounds/gnome/gnome1..N.wav (Barony idle + spot voices; death screams left out)
 
 # ---------------------------------------------------------------------------
 # Args
@@ -154,14 +155,13 @@ Write-Host "[1/5] Downloading $THEME sounds..."
 foreach ($name in @("startup", "send", "shutdown")) {
     Invoke-WebRequest -Uri "$REPO_URL/sounds/$THEME/$name.wav" -OutFile "$SOUNDS_DIR\$name.wav"
 }
+Remove-Item -Recurse -Force "$SOUNDS_DIR\gnome" -ErrorAction SilentlyContinue
 if ($GNOME) {
-    Write-Host "      + Barony gnome (12 clips)..."
+    Write-Host "      + Barony gnome ($GNOME_CLIPS clips)..."
     New-Item -ItemType Directory -Force -Path "$SOUNDS_DIR\gnome" | Out-Null
-    foreach ($i in 1..12) {
+    foreach ($i in 1..$GNOME_CLIPS) {
         Invoke-WebRequest -Uri "$REPO_URL/sounds/gnome/gnome$i.wav" -OutFile "$SOUNDS_DIR\gnome\gnome$i.wav"
     }
-} else {
-    Remove-Item -Recurse -Force "$SOUNDS_DIR\gnome" -ErrorAction SilentlyContinue
 }
 
 # --- 2. Cursor wrapper -----------------------------------------------------
@@ -231,11 +231,11 @@ if (`$in -match '"hook_event_name":\s*"PostToolUse"') {
     # fires per batch of streamed lines; only the last flush (final:true) counts -> one gnome per message
     if (`$in -notmatch '"final":\s*true') { exit 0 }
 }
-# debounce: no new gnome while the previous one (<= 2 s) may still be playing
+# cooldown: 3 s > longest clip (2 s), so two gnomes never overlap
 `$stamp = "$CONFIG_DIR\gnome.stamp"
-if ((Test-Path `$stamp) -and (((Get-Date) - (Get-Item `$stamp).LastWriteTime).TotalSeconds -lt 2)) { exit 0 }
+if ((Test-Path `$stamp) -and (((Get-Date) - (Get-Item `$stamp).LastWriteTime).TotalSeconds -lt 3)) { exit 0 }
 Set-Content -Path `$stamp -Value (Get-Date -Format o)
-`$n = Get-Random -Minimum 1 -Maximum 13
+`$n = Get-Random -Minimum 1 -Maximum $($GNOME_CLIPS + 1)
 (New-Object Media.SoundPlayer "$SOUNDS_DIR\gnome\gnome`$n.wav").Play()
 "@ | Set-Content -Path $gnomePs1 -Encoding UTF8
     @"

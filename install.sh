@@ -7,6 +7,7 @@ set -e
 VERSION="2.1.0"
 EXT_VERSION="2.0.0"   # VS Code extension (.vsix) version; bumped separately when extension/ changes
 REPO_URL="${WC3_REPO_URL:-https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main}"
+GNOME_CLIPS=8         # sounds/gnome/gnome1..N.wav (Barony idle + spot voices; death screams left out)
 
 # ---------------------------------------------------------------------------
 # Args
@@ -226,14 +227,13 @@ echo "[1/5] Downloading $THEME sounds..."
 for name in startup send shutdown; do
     curl -sL "$REPO_URL/sounds/$THEME/$name.wav" -o "$SOUNDS_DIR/$name.wav"
 done
+rm -rf "$SOUNDS_DIR/gnome"
 if [ "$GNOME" = "1" ]; then
-    echo "      + Barony gnome (12 clips)..."
+    echo "      + Barony gnome ($GNOME_CLIPS clips)..."
     mkdir -p "$SOUNDS_DIR/gnome"
-    for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    for i in $(seq 1 "$GNOME_CLIPS"); do
         curl -sL "$REPO_URL/sounds/gnome/gnome$i.wav" -o "$SOUNDS_DIR/gnome/gnome$i.wav"
     done
-else
-    rm -rf "$SOUNDS_DIR/gnome"
 fi
 
 # --- 2. Cursor: wrapper (startup/shutdown) ---------------------------------
@@ -326,11 +326,11 @@ case "\$INPUT" in
     # fires per batch of streamed lines; only the last flush (final:true) counts -> one gnome per message
     printf '%s' "\$INPUT" | grep -qE '"final": *true' || exit 0 ;;
 esac
-# debounce: no new gnome while the previous one (<= 2 s) may still be playing
+# cooldown: 3 s > longest clip (2 s), so two gnomes never overlap
 now=\$(date +%s); last=\$(cat "\$STAMP" 2>/dev/null || echo 0)
-[ "\$((now - last))" -lt 2 ] && exit 0
+[ "\$((now - last))" -lt 3 ] && exit 0
 echo "\$now" > "\$STAMP"
-SND="\$GNOME_DIR/gnome\$(( RANDOM % 12 + 1 )).wav"
+SND="\$GNOME_DIR/gnome\$(( RANDOM % $GNOME_CLIPS + 1 )).wav"
 $( [ "$PLATFORM" = "linux" ] && echo '( paplay "$SND" 2>/dev/null || aplay "$SND" 2>/dev/null ) &' || echo 'afplay "$SND" 2>/dev/null &' )
 exit 0
 EOF

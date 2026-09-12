@@ -232,6 +232,7 @@ if (`$in -match '"hook_event_name":\s*"PostToolUse"') {
     if (`$in -notmatch '"final":\s*true') { exit 0 }
 }
 # cooldown: 3 s > longest clip (2 s), so two gnomes never overlap
+# (WC3-voices-outrank-gnome priority is Linux/macOS only for now: these hooks cannot track playback)
 `$stamp = "$CONFIG_DIR\gnome.stamp"
 if ((Test-Path `$stamp) -and (((Get-Date) - (Get-Item `$stamp).LastWriteTime).TotalSeconds -lt 3)) { exit 0 }
 Set-Content -Path `$stamp -Value (Get-Date -Format o)

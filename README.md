@@ -96,6 +96,9 @@ The uninstaller removes our hooks from `~/.claude/settings.json` **without touch
   `~/.claude/projects/*/memory/`, `~/.claude/plans/`, or is a `CLAUDE.md`), and `PreCompact`. It picks one of
   8 clips at random (the gnome's idle and "spotted you" voices; its death screams are left out); a 3 s cooldown,
   longer than the longest clip, keeps two clips from ever overlapping.
+- **Only one voice at a time** — WC3 voices outrank the gnome: a WC3 hook stops a gnome that is playing or
+  waiting, and the gnome waits for a WC3 voice to finish before squeaking (Linux/macOS; on Windows the hooks
+  can't track playback, so only the cooldown applies).
 - **Audio players** — `afplay` (macOS), `paplay`/`aplay` (Linux), `Media.SoundPlayer` (Windows).
 
 ## Requirements

@@ -304,7 +304,11 @@ for evt in startup send shutdown; do
 #!/bin/bash
 cat > /dev/null 2>&1 || true   # drain stdin
 SND="$SOUNDS_DIR/$evt.wav"
-$( [ "$PLATFORM" = "linux" ] && echo '( paplay "$SND" 2>/dev/null || aplay "$SND" 2>/dev/null ) &' || echo 'afplay "$SND" 2>/dev/null &' )
+# Only one voice at a time: WC3 voices outrank the gnome, so stop a gnome that is playing (or waiting its turn)
+G="\$(cut -d' ' -f1 "$CONFIG_DIR/gnome.pid" 2>/dev/null)"
+[ -n "\$G" ] && kill -0 "\$G" 2>/dev/null && kill -- -"\$G" 2>/dev/null; rm -f "$CONFIG_DIR/gnome.pid"
+$( [ "$PLATFORM" = "linux" ] && echo '( paplay "$SND" 2>/dev/null || aplay "$SND" 2>/dev/null ) &' || echo '( afplay "$SND" 2>/dev/null ) &' )
+echo \$! > "$CONFIG_DIR/wc3.pid"
 exit 0
 EOF
     chmod +x "$CLAUDE_HOOK_DIR/$evt.sh"
@@ -331,7 +335,21 @@ now=\$(date +%s); last=\$(cat "\$STAMP" 2>/dev/null || echo 0)
 [ "\$((now - last))" -lt 3 ] && exit 0
 echo "\$now" > "\$STAMP"
 SND="\$GNOME_DIR/gnome\$(( RANDOM % $GNOME_CLIPS + 1 )).wav"
-$( [ "$PLATFORM" = "linux" ] && echo '( paplay "$SND" 2>/dev/null || aplay "$SND" 2>/dev/null ) &' || echo 'afplay "$SND" 2>/dev/null &' )
+# Only one voice at a time. WC3 voices outrank us (they stop us, see startup/send/shutdown.sh); we wait
+# (max 4 s) for a WC3 voice or an earlier gnome to finish, and a newer gnome replaces one still waiting.
+TOKEN="\$now.\$RANDOM"; echo "\$TOKEN" > "$CONFIG_DIR/gnome.token"
+PREV="\$(cut -d' ' -f1 "$CONFIG_DIR/gnome.pid" 2>/dev/null)"
+set -m   # own process group, so a WC3 hook can stop us (player included) with kill -- -PID
+(
+  i=0
+  while [ \$i -lt 40 ] && { kill -0 "\$(cat "$CONFIG_DIR/wc3.pid" 2>/dev/null)" 2>/dev/null || kill -0 "\$PREV" 2>/dev/null; }; do
+    sleep 0.1; i=\$((i + 1))
+  done
+  [ "\$(cat "$CONFIG_DIR/gnome.token" 2>/dev/null)" = "\$TOKEN" ] || exit 0   # a newer gnome took over
+  $( [ "$PLATFORM" = "linux" ] && echo 'paplay "$SND" 2>/dev/null || aplay "$SND" 2>/dev/null' || echo 'afplay "$SND" 2>/dev/null' )
+  [ "\$(cut -d' ' -f2 "$CONFIG_DIR/gnome.pid" 2>/dev/null)" = "\$TOKEN" ] && rm -f "$CONFIG_DIR/gnome.pid"
+) &
+echo "\$! \$TOKEN" > "$CONFIG_DIR/gnome.pid"
 exit 0
 EOF
     chmod +x "$CLAUDE_HOOK_DIR/gnome.sh"

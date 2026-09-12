@@ -4,25 +4,29 @@
 # https://github.com/JohnHolz/cursor-startup-sound
 set -e
 
-VERSION="2.0.0"
-REPO_URL="https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main"
+VERSION="2.1.0"
+EXT_VERSION="2.0.0"   # VS Code extension (.vsix) version; bumped separately when extension/ changes
+REPO_URL="${WC3_REPO_URL:-https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main}"
 
 # ---------------------------------------------------------------------------
 # Args
 # ---------------------------------------------------------------------------
 THEME="${WC3_THEME:-}"
+GNOME="${WC3_GNOME:-1}"
 DO_UNINSTALL=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --uninstall|-u) DO_UNINSTALL=1 ;;
         --theme)        THEME="$2"; shift ;;
         --theme=*)      THEME="${1#*=}" ;;
+        --no-gnome)     GNOME=0 ;;
         --help|-h)
             echo "WC3 Editor Sounds installer v$VERSION"
             echo ""
-            echo "Usage: install.sh [--theme human|orc] [--uninstall]"
+            echo "Usage: install.sh [--theme human|orc] [--no-gnome] [--uninstall]"
             echo ""
             echo "  --theme human|orc   Sound theme (default: human). Or set WC3_THEME."
+            echo "  --no-gnome          Skip the Barony gnome (Claude Code progress/memory/compact sound). Or WC3_GNOME=0."
             echo "  --uninstall, -u     Remove everything this installer created."
             exit 0 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
@@ -59,13 +63,13 @@ fi
 
 # ---------------------------------------------------------------------------
 # settings.json merge helper (Claude Code) — preserves existing user hooks
-#   merge_claude add|remove
-# Reads $CLAUDE_SETTINGS, adds/removes our 3 hooks, writes back.
+#   merge_claude add|remove '<json map>'
+# Map: {"<HookEvent>": {"cmd": "/path/hook.sh", "matcher": "Write|Edit"}, ...}  (matcher optional)
+# Reads $CLAUDE_SETTINGS, adds/removes the mapped hooks, writes back.
 # Returns 1 if no merger (python3/jq) is available so caller can print manual steps.
 # ---------------------------------------------------------------------------
 merge_claude() {
-    local mode="$1"
-    local map="{\"SessionStart\":\"$CLAUDE_HOOK_DIR/startup.sh\",\"UserPromptSubmit\":\"$CLAUDE_HOOK_DIR/send.sh\",\"Stop\":\"$CLAUDE_HOOK_DIR/shutdown.sh\"}"
+    local mode="$1" map="$2"
 
     if command -v python3 >/dev/null 2>&1; then
         python3 - "$mode" "$CLAUDE_SETTINGS" "$map" <<'PYEOF'
@@ -87,10 +91,14 @@ hooks = data.get("hooks") if isinstance(data.get("hooks"), dict) else {}
 def is_ours(entry, cmd):
     return any(h.get("command") == cmd for h in entry.get("hooks", []) if isinstance(h, dict))
 
-for event, cmd in mapping.items():
+for event, spec in mapping.items():
+    cmd = spec["cmd"]
     arr = [e for e in hooks.get(event, []) if isinstance(e, dict) and not is_ours(e, cmd)]
     if mode == "add":
-        arr.append({"hooks": [{"type": "command", "command": cmd}]})
+        entry = {"hooks": [{"type": "command", "command": cmd}]}
+        if spec.get("matcher"):
+            entry = {"matcher": spec["matcher"], **entry}
+        arr.append(entry)
     if arr:
         hooks[event] = arr
     elif event in hooks:
@@ -110,28 +118,28 @@ PYEOF
     elif command -v jq >/dev/null 2>&1; then
         local tmp; tmp="$(mktemp)"
         [ -f "$CLAUDE_SETTINGS" ] || echo '{}' > "$CLAUDE_SETTINGS"
-        if [ "$mode" = "add" ]; then
-            jq --arg s "$CLAUDE_HOOK_DIR/startup.sh" \
-               --arg p "$CLAUDE_HOOK_DIR/send.sh" \
-               --arg d "$CLAUDE_HOOK_DIR/shutdown.sh" '
-              .hooks //= {} |
-              .hooks.SessionStart    = ((.hooks.SessionStart    // []) | map(select(any(.hooks[]?; .command==$s)|not))) + [{"hooks":[{"type":"command","command":$s}]}] |
-              .hooks.UserPromptSubmit= ((.hooks.UserPromptSubmit // []) | map(select(any(.hooks[]?; .command==$p)|not))) + [{"hooks":[{"type":"command","command":$p}]}] |
-              .hooks.Stop            = ((.hooks.Stop            // []) | map(select(any(.hooks[]?; .command==$d)|not))) + [{"hooks":[{"type":"command","command":$d}]}]
-            ' "$CLAUDE_SETTINGS" > "$tmp" && mv "$tmp" "$CLAUDE_SETTINGS"
-        else
-            jq --arg s "$CLAUDE_HOOK_DIR/startup.sh" \
-               --arg p "$CLAUDE_HOOK_DIR/send.sh" \
-               --arg d "$CLAUDE_HOOK_DIR/shutdown.sh" '
-              (.hooks.SessionStart)     |= (map(select(any(.hooks[]?; .command==$s)|not))) |
-              (.hooks.UserPromptSubmit) |= (map(select(any(.hooks[]?; .command==$p)|not))) |
-              (.hooks.Stop)             |= (map(select(any(.hooks[]?; .command==$d)|not)))
-            ' "$CLAUDE_SETTINGS" > "$tmp" && mv "$tmp" "$CLAUDE_SETTINGS"
-        fi
+        jq --arg mode "$mode" --argjson map "$map" '
+          .hooks //= {} |
+          reduce ($map | to_entries[]) as $e (.;
+            .hooks[$e.key] = (
+              ((.hooks[$e.key] // []) | map(select(any(.hooks[]?; .command == $e.value.cmd) | not)))
+              + (if $mode == "add"
+                 then [ (if $e.value.matcher then {matcher: $e.value.matcher} else {} end)
+                        + {hooks: [{type: "command", command: $e.value.cmd}]} ]
+                 else [] end)
+            ) |
+            if (.hooks[$e.key] | length) == 0 then del(.hooks[$e.key]) else . end
+          ) |
+          if (.hooks | length) == 0 then del(.hooks) else . end
+        ' "$CLAUDE_SETTINGS" > "$tmp" && mv "$tmp" "$CLAUDE_SETTINGS"
         return 0
     fi
     return 1  # no merger available
 }
+
+# Hook maps: WC3 voices (theme) + Barony gnome (Claude Code only, one script for 3 events)
+BASE_MAP="{\"SessionStart\":{\"cmd\":\"$CLAUDE_HOOK_DIR/startup.sh\"},\"UserPromptSubmit\":{\"cmd\":\"$CLAUDE_HOOK_DIR/send.sh\"},\"Stop\":{\"cmd\":\"$CLAUDE_HOOK_DIR/shutdown.sh\"}}"
+GNOME_MAP="{\"MessageDisplay\":{\"cmd\":\"$CLAUDE_HOOK_DIR/gnome.sh\"},\"PostToolUse\":{\"cmd\":\"$CLAUDE_HOOK_DIR/gnome.sh\",\"matcher\":\"Write|Edit|MultiEdit\"},\"PreCompact\":{\"cmd\":\"$CLAUDE_HOOK_DIR/gnome.sh\"}}"
 
 # ---------------------------------------------------------------------------
 # Uninstall
@@ -156,7 +164,7 @@ if [ "$DO_UNINSTALL" = "1" ]; then
     fi
     # Claude Code hooks
     if [ -f "$CLAUDE_SETTINGS" ]; then
-        if merge_claude remove; then
+        if merge_claude remove "$BASE_MAP" && merge_claude remove "$GNOME_MAP"; then
             echo "  Removed Claude Code hooks from settings.json"
         else
             echo "  Note: edit ~/.claude/settings.json to remove the wc3-sounds hooks (no python3/jq found)"
@@ -218,6 +226,15 @@ echo "[1/5] Downloading $THEME sounds..."
 for name in startup send shutdown; do
     curl -sL "$REPO_URL/sounds/$THEME/$name.wav" -o "$SOUNDS_DIR/$name.wav"
 done
+if [ "$GNOME" = "1" ]; then
+    echo "      + Barony gnome (12 clips)..."
+    mkdir -p "$SOUNDS_DIR/gnome"
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+        curl -sL "$REPO_URL/sounds/gnome/gnome$i.wav" -o "$SOUNDS_DIR/gnome/gnome$i.wav"
+    done
+else
+    rm -rf "$SOUNDS_DIR/gnome"
+fi
 
 # --- 2. Cursor: wrapper (startup/shutdown) ---------------------------------
 echo "[2/5] Configuring Cursor wrapper..."
@@ -292,20 +309,58 @@ exit 0
 EOF
     chmod +x "$CLAUDE_HOOK_DIR/$evt.sh"
 done
-if merge_claude add; then
+
+# Barony gnome: one script for MessageDisplay / PostToolUse / PreCompact, plays a random clip.
+if [ "$GNOME" = "1" ]; then
+    cat > "$CLAUDE_HOOK_DIR/gnome.sh" << EOF
+#!/bin/bash
+# wc3-sounds: Barony gnome — random squeak on Claude Code progress / memory / plan / CLAUDE.md / compact
+INPUT="\$(cat 2>/dev/null)"
+GNOME_DIR="$SOUNDS_DIR/gnome"
+STAMP="$CONFIG_DIR/gnome.stamp"
+case "\$INPUT" in
+  *'"hook_event_name":"PostToolUse"'*|*'"hook_event_name": "PostToolUse"'*)
+    # only memory / plan / CLAUDE.md writes
+    printf '%s' "\$INPUT" | grep -qE '"file_path": *"[^"]*(/\\.claude/projects/[^"]*/memory/|/\\.claude/plans/|/CLAUDE(\\.local)?\\.md")' || exit 0 ;;
+  *'"hook_event_name":"MessageDisplay"'*|*'"hook_event_name": "MessageDisplay"'*)
+    # fires per batch of streamed lines; only the last flush (final:true) counts -> one gnome per message
+    printf '%s' "\$INPUT" | grep -qE '"final": *true' || exit 0 ;;
+esac
+# debounce: no new gnome while the previous one (<= 2 s) may still be playing
+now=\$(date +%s); last=\$(cat "\$STAMP" 2>/dev/null || echo 0)
+[ "\$((now - last))" -lt 2 ] && exit 0
+echo "\$now" > "\$STAMP"
+SND="\$GNOME_DIR/gnome\$(( RANDOM % 12 + 1 )).wav"
+$( [ "$PLATFORM" = "linux" ] && echo '( paplay "$SND" 2>/dev/null || aplay "$SND" 2>/dev/null ) &' || echo 'afplay "$SND" 2>/dev/null &' )
+exit 0
+EOF
+    chmod +x "$CLAUDE_HOOK_DIR/gnome.sh"
+else
+    rm -f "$CLAUDE_HOOK_DIR/gnome.sh"
+fi
+
+if merge_claude add "$BASE_MAP"; then
     echo "  Claude Code hooks installed (SessionStart / UserPromptSubmit / Stop)"
+    if [ "$GNOME" = "1" ]; then
+        merge_claude add "$GNOME_MAP" && echo "  Barony gnome hooks installed (MessageDisplay / PostToolUse / PreCompact)"
+    else
+        merge_claude remove "$GNOME_MAP" && echo "  Barony gnome hooks removed (--no-gnome)"
+    fi
 else
     echo "  Note: no python3/jq found. Add these to ~/.claude/settings.json under \"hooks\":"
     echo "    SessionStart -> $CLAUDE_HOOK_DIR/startup.sh"
     echo "    UserPromptSubmit -> $CLAUDE_HOOK_DIR/send.sh"
     echo "    Stop -> $CLAUDE_HOOK_DIR/shutdown.sh"
+    if [ "$GNOME" = "1" ]; then
+        echo "    MessageDisplay, PostToolUse (matcher \"Write|Edit|MultiEdit\"), PreCompact -> $CLAUDE_HOOK_DIR/gnome.sh"
+    fi
 fi
 
 # --- 5. VS Code: install the extension (covers startup/shutdown) ------------
 echo "[5/5] Configuring VS Code..."
 if command -v code >/dev/null 2>&1; then
     VSIX_TMP="$(mktemp --suffix=.vsix 2>/dev/null || mktemp)"
-    if curl -fsSL "$REPO_URL/extension/wc3-sounds-$VERSION.vsix" -o "$VSIX_TMP" 2>/dev/null; then
+    if curl -fsSL "$REPO_URL/extension/wc3-sounds-$EXT_VERSION.vsix" -o "$VSIX_TMP" 2>/dev/null; then
         code --install-extension "$VSIX_TMP" --force >/dev/null 2>&1 \
             && echo "  VS Code extension installed." \
             || echo "  Could not auto-install the VS Code extension; install the .vsix manually."
@@ -401,9 +456,13 @@ echo ""
 echo "Done! Theme '$THEME' configured for:"
 echo "  - Cursor      : startup, shutdown (wrapper) + send (hook)"
 echo "  - Claude Code : startup, send, shutdown (hooks)"
+if [ "$GNOME" = "1" ]; then
+    echo "                  + Barony gnome: progress text, memory, plan, CLAUDE.md, compact (random clip)"
+fi
 echo "  - VS Code     : startup, shutdown (extension, if 'code' present)"
 echo ""
 echo "Restart your editors to activate hooks."
 echo "Commands:"
 echo "  Switch theme: curl -fsSL $REPO_URL/install.sh | bash -s -- --theme orc"
+echo "  No gnome:     curl -fsSL $REPO_URL/install.sh | bash -s -- --no-gnome"
 echo "  Uninstall:    curl -fsSL $REPO_URL/install.sh | bash -s -- --uninstall"

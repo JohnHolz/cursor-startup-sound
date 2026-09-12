@@ -7,19 +7,22 @@ param()
 
 $ErrorActionPreference = "Stop"
 
-$VERSION  = "2.0.0"
-$REPO_URL = "https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main"
+$VERSION     = "2.1.0"
+$EXT_VERSION = "2.0.0"   # VS Code extension (.vsix) version; bumped separately when extension/ changes
+$REPO_URL    = if ($env:WC3_REPO_URL) { $env:WC3_REPO_URL } else { "https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main" }
 
 # ---------------------------------------------------------------------------
 # Args
 # ---------------------------------------------------------------------------
 $THEME = $env:WC3_THEME
+$GNOME = ($env:WC3_GNOME -ne "0")
 $DO_UNINSTALL = $false
 for ($i = 0; $i -lt $args.Count; $i++) {
     switch ($args[$i]) {
         "--uninstall" { $DO_UNINSTALL = $true }
         "-u"          { $DO_UNINSTALL = $true }
         "--theme"     { $THEME = $args[$i + 1]; $i++ }
+        "--no-gnome"  { $GNOME = $false }
         default {
             if ($args[$i] -like "--theme=*") { $THEME = $args[$i].Split("=")[1] }
         }
@@ -42,6 +45,7 @@ if (-not (Test-Path $CURSOR_PATH)) { $CURSOR_PATH = "$env:USERPROFILE\AppData\Lo
 
 # ---------------------------------------------------------------------------
 # Claude settings.json merge — preserves existing user hooks
+#   Map: @{ "<HookEvent>" = @{ cmd = "C:\path\hook.bat"; matcher = "Write|Edit" } }  (matcher optional)
 # ---------------------------------------------------------------------------
 function Merge-ClaudeHooks {
     param([string]$Mode, [hashtable]$Map)
@@ -53,7 +57,8 @@ function Merge-ClaudeHooks {
         $json | Add-Member -NotePropertyName hooks -NotePropertyValue ([PSCustomObject]@{}) -Force
     }
     foreach ($event in $Map.Keys) {
-        $cmd = $Map[$event]
+        $spec = $Map[$event]
+        $cmd = $spec.cmd
         $existing = @()
         if (($json.hooks.PSObject.Properties.Name -contains $event) -and $json.hooks.$event) {
             $existing = @($json.hooks.$event | Where-Object {
@@ -63,8 +68,10 @@ function Merge-ClaudeHooks {
             })
         }
         if ($Mode -eq 'add') {
-            $entry = [PSCustomObject]@{ hooks = @([PSCustomObject]@{ type = 'command'; command = $cmd }) }
-            $existing = @($existing) + $entry
+            $entry = [ordered]@{}
+            if ($spec.matcher) { $entry.matcher = $spec.matcher }
+            $entry.hooks = @([PSCustomObject]@{ type = 'command'; command = $cmd })
+            $existing = @($existing) + [PSCustomObject]$entry
         }
         if ($existing.Count -gt 0) {
             $json.hooks | Add-Member -NotePropertyName $event -NotePropertyValue $existing -Force
@@ -80,9 +87,15 @@ function Merge-ClaudeHooks {
 }
 
 $claudeMap = @{
-    "SessionStart"     = "$CLAUDE_HOOK_DIR\startup.bat"
-    "UserPromptSubmit" = "$CLAUDE_HOOK_DIR\send.bat"
-    "Stop"             = "$CLAUDE_HOOK_DIR\shutdown.bat"
+    "SessionStart"     = @{ cmd = "$CLAUDE_HOOK_DIR\startup.bat" }
+    "UserPromptSubmit" = @{ cmd = "$CLAUDE_HOOK_DIR\send.bat" }
+    "Stop"             = @{ cmd = "$CLAUDE_HOOK_DIR\shutdown.bat" }
+}
+# Barony gnome (Claude Code only): one script for 3 events
+$gnomeMap = @{
+    "MessageDisplay" = @{ cmd = "$CLAUDE_HOOK_DIR\gnome.bat" }
+    "PostToolUse"    = @{ cmd = "$CLAUDE_HOOK_DIR\gnome.bat"; matcher = "Write|Edit|MultiEdit" }
+    "PreCompact"     = @{ cmd = "$CLAUDE_HOOK_DIR\gnome.bat" }
 }
 
 # ---------------------------------------------------------------------------
@@ -96,7 +109,7 @@ if ($DO_UNINSTALL) {
     Remove-Item -Force "$CURSOR_HOOKS_DIR\play-send-sound.bat" -ErrorAction SilentlyContinue
     Remove-Item "$env:USERPROFILE\Desktop\Cursor (with sound).lnk" -ErrorAction SilentlyContinue
     if (Test-Path $CLAUDE_SETTINGS) {
-        if (Merge-ClaudeHooks -Mode 'remove' -Map $claudeMap) {
+        if ((Merge-ClaudeHooks -Mode 'remove' -Map $claudeMap) -and (Merge-ClaudeHooks -Mode 'remove' -Map $gnomeMap)) {
             Write-Host "  Removed Claude Code hooks from settings.json"
         } else {
             Write-Host "  Note: edit ~/.claude/settings.json to remove the wc3-sounds hooks" -ForegroundColor Yellow
@@ -140,6 +153,15 @@ New-Item -ItemType Directory -Force -Path $SOUNDS_DIR, $CLAUDE_HOOK_DIR, $CURSOR
 Write-Host "[1/5] Downloading $THEME sounds..."
 foreach ($name in @("startup", "send", "shutdown")) {
     Invoke-WebRequest -Uri "$REPO_URL/sounds/$THEME/$name.wav" -OutFile "$SOUNDS_DIR\$name.wav"
+}
+if ($GNOME) {
+    Write-Host "      + Barony gnome (12 clips)..."
+    New-Item -ItemType Directory -Force -Path "$SOUNDS_DIR\gnome" | Out-Null
+    foreach ($i in 1..12) {
+        Invoke-WebRequest -Uri "$REPO_URL/sounds/gnome/gnome$i.wav" -OutFile "$SOUNDS_DIR\gnome\gnome$i.wav"
+    }
+} else {
+    Remove-Item -Recurse -Force "$SOUNDS_DIR\gnome" -ErrorAction SilentlyContinue
 }
 
 # --- 2. Cursor wrapper -----------------------------------------------------
@@ -195,8 +217,42 @@ foreach ($evt in @("startup", "send", "shutdown")) {
 powershell -NoProfile -WindowStyle Hidden -File "$ps1"
 "@ | Set-Content -Path "$CLAUDE_HOOK_DIR\$evt.bat" -Encoding ASCII
 }
+
+# Barony gnome: one script for MessageDisplay / PostToolUse / PreCompact, plays a random clip.
+$gnomePs1 = "$CLAUDE_HOOK_DIR\gnome.ps1"
+if ($GNOME) {
+    @"
+# wc3-sounds: Barony gnome - random squeak on Claude Code progress / memory / plan / CLAUDE.md / compact
+`$in = [string](`$input | Out-String)
+if (`$in -match '"hook_event_name":\s*"PostToolUse"') {
+    # only memory / plan / CLAUDE.md writes (paths arrive JSON-escaped: \\ or /)
+    if (`$in -notmatch '"file_path":\s*"[^"]*([\\/]+\.claude[\\/]+projects[\\/]+[^"]*[\\/]+memory[\\/]+|[\\/]+\.claude[\\/]+plans[\\/]+|[\\/]+CLAUDE(\.local)?\.md")') { exit 0 }
+} elseif (`$in -match '"hook_event_name":\s*"MessageDisplay"') {
+    # fires per batch of streamed lines; only the last flush (final:true) counts -> one gnome per message
+    if (`$in -notmatch '"final":\s*true') { exit 0 }
+}
+# debounce: no new gnome while the previous one (<= 2 s) may still be playing
+`$stamp = "$CONFIG_DIR\gnome.stamp"
+if ((Test-Path `$stamp) -and (((Get-Date) - (Get-Item `$stamp).LastWriteTime).TotalSeconds -lt 2)) { exit 0 }
+Set-Content -Path `$stamp -Value (Get-Date -Format o)
+`$n = Get-Random -Minimum 1 -Maximum 13
+(New-Object Media.SoundPlayer "$SOUNDS_DIR\gnome\gnome`$n.wav").Play()
+"@ | Set-Content -Path $gnomePs1 -Encoding UTF8
+    @"
+@echo off
+powershell -NoProfile -WindowStyle Hidden -File "$gnomePs1"
+"@ | Set-Content -Path "$CLAUDE_HOOK_DIR\gnome.bat" -Encoding ASCII
+} else {
+    Remove-Item -Force $gnomePs1, "$CLAUDE_HOOK_DIR\gnome.bat" -ErrorAction SilentlyContinue
+}
+
 if (Merge-ClaudeHooks -Mode 'add' -Map $claudeMap) {
     Write-Host "  Claude Code hooks installed (SessionStart / UserPromptSubmit / Stop)"
+    if ($GNOME) {
+        if (Merge-ClaudeHooks -Mode 'add' -Map $gnomeMap) { Write-Host "  Barony gnome hooks installed (MessageDisplay / PostToolUse / PreCompact)" }
+    } else {
+        if (Merge-ClaudeHooks -Mode 'remove' -Map $gnomeMap) { Write-Host "  Barony gnome hooks removed (--no-gnome)" }
+    }
 } else {
     Write-Host "  Note: settings.json unparseable; add the wc3-sounds .bat hooks manually." -ForegroundColor Yellow
 }
@@ -204,9 +260,9 @@ if (Merge-ClaudeHooks -Mode 'add' -Map $claudeMap) {
 # --- 5. VS Code extension --------------------------------------------------
 Write-Host "[5/5] Configuring VS Code..."
 if (Get-Command code -ErrorAction SilentlyContinue) {
-    $vsix = "$env:TEMP\wc3-sounds-$VERSION.vsix"
+    $vsix = "$env:TEMP\wc3-sounds-$EXT_VERSION.vsix"
     try {
-        Invoke-WebRequest -Uri "$REPO_URL/extension/wc3-sounds-$VERSION.vsix" -OutFile $vsix -ErrorAction Stop
+        Invoke-WebRequest -Uri "$REPO_URL/extension/wc3-sounds-$EXT_VERSION.vsix" -OutFile $vsix -ErrorAction Stop
         & code --install-extension $vsix --force 2>$null | Out-Null
         Write-Host "  VS Code extension installed."
         # best-effort: set theme in VS Code user settings
@@ -242,9 +298,11 @@ Write-Host ""
 Write-Host "Done! Theme '$THEME' configured for:" -ForegroundColor Green
 Write-Host "  - Cursor      : startup, shutdown (wrapper) + send (hook)"
 Write-Host "  - Claude Code : startup, send, shutdown (hooks)"
+if ($GNOME) { Write-Host "                  + Barony gnome: progress text, memory, plan, CLAUDE.md, compact (random clip)" }
 Write-Host "  - VS Code     : startup, shutdown (extension, if 'code' present)"
 Write-Host ""
 Write-Host "Restart your editors to activate hooks."
 Write-Host "Commands:" -ForegroundColor Cyan
 Write-Host "  Switch theme: & ([scriptblock]::Create((irm $REPO_URL/install.ps1))) --theme orc"
+Write-Host "  No gnome:     & ([scriptblock]::Create((irm $REPO_URL/install.ps1))) --no-gnome"
 Write-Host "  Uninstall:    & ([scriptblock]::Create((irm $REPO_URL/install.ps1))) --uninstall"

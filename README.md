@@ -9,9 +9,9 @@ Pick your faction:
 | `human` | Peasant | *"Ready to work!"* | *"Yes?"* | *"Job's done"* |
 | `orc`   | Peon    | *"Ready to work!"* | *"What you want?"* | *"Work complete!"* |
 
-**Bonus (Claude Code only):** a **Barony gnome** squeaks — one of 8 random clips — every time Claude finishes a
-step (each block of progress text), saves a memory, writes a plan, edits `CLAUDE.md`, or compacts context.
-Opt out with `--no-gnome`.
+**Bonus:** a **Barony gnome** squeaks — one of 8 random clips — every time the agent finishes a step, edits its
+own instructions (memory, plans, `CLAUDE.md`, `AGENTS.md`, Cursor rules), or compacts context. Works in
+**Claude Code**, **Cursor** and **VS Code** (Copilot agent hooks). Opt out with `--no-gnome`.
 
 Works in **Cursor**, **VS Code**, and **Claude Code** — installable via **CLI** or as a **VS Code extension**.
 
@@ -21,12 +21,14 @@ Works in **Cursor**, **VS Code**, and **Claude Code** — installable via **CLI*
 
 | Environment | Startup | Shutdown | Send | Gnome | How it's delivered |
 |-------------|:-------:|:--------:|:----:|:-----:|--------------------|
-| **Cursor**      | ✅ | ✅ | ✅ | ➖ | wrapper script + `beforeSubmitPrompt` hook |
-| **VS Code**     | ✅ | ✅ | ⚠️ | ➖ | extension (`onStartupFinished` / `deactivate`); send only via optional keybinding* |
+| **Cursor**      | ✅ | ✅ | ✅ | ✅ | wrapper script + `~/.cursor/hooks.json` (`beforeSubmitPrompt`, plus `afterAgentResponse` / `afterFileEdit` / `preCompact` for the gnome) |
+| **VS Code**     | ✅ | ✅ | ✅* | ✅* | extension (`onStartupFinished` / `deactivate`) + `~/.copilot/hooks/wc3-sounds.json` (Copilot agent hooks: `UserPromptSubmit` / `Stop` / `PostToolUse` / `PreCompact`)* |
 | **Claude Code** | ✅ | ✅ | ✅ | ✅ | `~/.claude/settings.json` hooks (`SessionStart` / `Stop` / `UserPromptSubmit`, plus `MessageDisplay` / `PostToolUse` / `PreCompact` for the gnome) |
 
-\* VS Code has **no public API** to detect "message sent to the AI", so the send sound there is a best-effort
-keybinding (off by default). On Cursor and Claude Code the send sound is hook-driven and reliable.
+\* VS Code: send, *"Job's done"* after each answer, and the gnome ride on **Copilot agent hooks** (Preview,
+`chat.useHooks`, on by default) — they play in Copilot's agent mode, not in other chat extensions. VS Code has no
+per-message hook, so the gnome there squeaks on every tool call instead. The extension's optional send
+keybinding (off by default) stays as a fallback for other chats.
 
 ---
 
@@ -79,8 +81,8 @@ curl -fsSL https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main/
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main/install.ps1))) --uninstall
 ```
 
-The uninstaller removes our hooks from `~/.claude/settings.json` **without touching your other hooks**
-(via `python3`/`jq` on Unix, native JSON on Windows).
+The uninstaller removes our hooks from `~/.claude/settings.json` and `~/.cursor/hooks.json` **without touching
+your other hooks** (via `python3`/`jq` on Unix, native JSON on Windows) and deletes `~/.copilot/hooks/wc3-sounds.json`.
 
 ---
 
@@ -89,22 +91,41 @@ The uninstaller removes our hooks from `~/.claude/settings.json` **without touch
 - **Startup / Shutdown** — CLI: a wrapper that plays sounds before/after launching Cursor. Extension:
   plays in `activate()` (`onStartupFinished`) and `deactivate()` (detached so it outlives the window).
 - **Send** — Cursor: [`beforeSubmitPrompt` hook](https://cursor.com/docs/agent/hooks). Claude Code:
-  `UserPromptSubmit` hook. VS Code: optional keybinding.
-- **Gnome** — Claude Code only. One hook script (`gnome.sh` / `gnome.bat`) registered on `MessageDisplay`
-  (fires per batch of streamed lines; the script only reacts to the `final` flush, so one clip per assistant
-  message), `PostToolUse` for `Write|Edit|MultiEdit` (only when the file is under
-  `~/.claude/projects/*/memory/`, `~/.claude/plans/`, or is a `CLAUDE.md`), and `PreCompact`. It picks one of
-  8 clips at random (the gnome's idle and "spotted you" voices; its death screams are left out); a 3 s cooldown,
-  longer than the longest clip, keeps two clips from ever overlapping.
-- **Only one voice at a time** — WC3 voices outrank the gnome: a WC3 hook stops a gnome that is playing or
-  waiting, and the gnome waits for a WC3 voice to finish before squeaking (Linux/macOS; on Windows the hooks
-  can't track playback, so only the cooldown applies).
+  `UserPromptSubmit` hook. VS Code: `UserPromptSubmit` via
+  [Copilot agent hooks](https://code.visualstudio.com/docs/copilot/customization/hooks), read from
+  `~/.copilot/hooks/*.json` (we write our own file there, so nothing of yours is merged or changed); the
+  optional keybinding remains for other chats.
+- **Gnome** — one hook script (`gnome.sh` / `gnome.bat`) shared by all three editors; it looks at
+  `hook_event_name` to know who called:
+  - *Claude Code*: `MessageDisplay` (fires per batch of streamed lines; only the `final` flush counts, so one
+    clip per assistant message), `PostToolUse` for `Write|Edit|MultiEdit` (only when the file is under
+    `~/.claude/projects/*/memory/`, `~/.claude/plans/`, or is a `CLAUDE.md`), and `PreCompact`.
+  - *Cursor*: `afterAgentResponse` (one clip per assistant message), `afterFileEdit` (only `.cursor/rules/`,
+    `.cursor/plans/`, `.cursorrules`, `AGENTS.md`, `CLAUDE.md`), and `preCompact`.
+  - *VS Code*: `PostToolUse` on every tool call (there is no per-message event, and VS Code ignores hook
+    matchers) and `PreCompact`.
+
+  It picks one of 8 clips at random (the gnome's idle and "spotted you" voices; its death screams are left
+  out); a 3 s cooldown, longer than the longest clip, keeps two clips from ever overlapping. The script answers
+  `{}` on stdout (every editor parses hook output as JSON) except on `MessageDisplay`, where stdout would
+  replace the text on screen.
+- **Only one voice at a time** — WC3 voices outrank the gnome: a WC3 hook (Claude Code or Cursor) stops a gnome
+  that is playing or waiting, and the gnome waits for a WC3 voice to finish before squeaking (Linux/macOS; on
+  Windows the hooks can't track playback, so only the cooldown applies).
 - **Audio players** — `afplay` (macOS), `paplay`/`aplay` (Linux), `Media.SoundPlayer` (Windows).
 
 ## Requirements
 
-A system audio player (present by default on virtually all desktops) and, for the CLI's settings merge,
-`python3` or `jq` on Linux/macOS (falls back to printing manual steps if neither is present).
+A system audio player (present by default on virtually all desktops) and, for the CLI's settings merge
+(`~/.claude/settings.json`, `~/.cursor/hooks.json`), `python3` or `jq` on Linux/macOS (falls back to printing
+manual steps if neither is present).
+
+## Development
+
+```bash
+bash tests/test-install.sh        # installs into a throwaway $HOME with fake players, feeds every editor's hook JSON
+bash tests/test-install.sh --jq   # same, with python3 hidden so the jq merge path is exercised
+```
 
 ## License
 

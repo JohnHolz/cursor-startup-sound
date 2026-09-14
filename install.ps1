@@ -7,7 +7,7 @@ param()
 
 $ErrorActionPreference = "Stop"
 
-$VERSION     = "2.1.0"
+$VERSION     = "2.2.0"
 $EXT_VERSION = "2.0.0"   # VS Code extension (.vsix) version; bumped separately when extension/ changes
 $REPO_URL    = if ($env:WC3_REPO_URL) { $env:WC3_REPO_URL } else { "https://raw.githubusercontent.com/JohnHolz/cursor-startup-sound/main" }
 $GNOME_CLIPS = 8         # sounds/gnome/gnome1..N.wav (Barony idle + spot voices; death screams left out)
@@ -41,6 +41,7 @@ $THEME_FILE        = "$CONFIG_DIR\theme.txt"
 $CURSOR_HOOKS_DIR  = "$env:USERPROFILE\.cursor\hooks"
 $CURSOR_HOOKS_FILE = "$env:USERPROFILE\.cursor\hooks.json"
 $CLAUDE_SETTINGS   = "$env:USERPROFILE\.claude\settings.json"
+$COPILOT_HOOKS_FILE = "$env:USERPROFILE\.copilot\hooks\wc3-sounds.json"   # VS Code Copilot agent hooks (a file we own)
 $CURSOR_PATH       = "$env:LOCALAPPDATA\Programs\cursor\Cursor.exe"
 if (-not (Test-Path $CURSOR_PATH)) { $CURSOR_PATH = "$env:USERPROFILE\AppData\Local\Programs\cursor\Cursor.exe" }
 
@@ -92,11 +93,62 @@ $claudeMap = @{
     "UserPromptSubmit" = @{ cmd = "$CLAUDE_HOOK_DIR\send.bat" }
     "Stop"             = @{ cmd = "$CLAUDE_HOOK_DIR\shutdown.bat" }
 }
-# Barony gnome (Claude Code only): one script for 3 events
+# Barony gnome: one script for 3 events
 $gnomeMap = @{
     "MessageDisplay" = @{ cmd = "$CLAUDE_HOOK_DIR\gnome.bat" }
     "PostToolUse"    = @{ cmd = "$CLAUDE_HOOK_DIR\gnome.bat"; matcher = "Write|Edit|MultiEdit" }
     "PreCompact"     = @{ cmd = "$CLAUDE_HOOK_DIR\gnome.bat" }
+}
+
+# ---------------------------------------------------------------------------
+# Cursor hooks.json merge — preserves existing user hooks
+#   Map: @{ "<hookName>" = "C:\path\hook.bat" }
+# Deletes the file on remove if nothing but our hooks was in it.
+# ---------------------------------------------------------------------------
+function Merge-CursorHooks {
+    param([string]$Mode, [hashtable]$Map)
+    if (Test-Path $CURSOR_HOOKS_FILE) {
+        try { $json = Get-Content $CURSOR_HOOKS_FILE -Raw | ConvertFrom-Json -ErrorAction Stop }
+        catch { return $false }
+    } else { $json = [PSCustomObject]@{} }
+    if (-not ($json.PSObject.Properties.Name -contains 'hooks') -or $null -eq $json.hooks) {
+        $json | Add-Member -NotePropertyName hooks -NotePropertyValue ([PSCustomObject]@{}) -Force
+    }
+    foreach ($event in $Map.Keys) {
+        $cmd = $Map[$event]
+        $existing = @()
+        if (($json.hooks.PSObject.Properties.Name -contains $event) -and $json.hooks.$event) {
+            $existing = @($json.hooks.$event | Where-Object { $_.command -ne $cmd })
+        }
+        if ($Mode -eq 'add') {
+            $existing = @($existing) + [PSCustomObject]@{ command = $cmd }
+        }
+        if ($existing.Count -gt 0) {
+            $json.hooks | Add-Member -NotePropertyName $event -NotePropertyValue $existing -Force
+        } elseif ($json.hooks.PSObject.Properties.Name -contains $event) {
+            $json.hooks.PSObject.Properties.Remove($event)
+        }
+    }
+    $otherKeys = @($json.PSObject.Properties.Name | Where-Object { $_ -ne 'version' -and $_ -ne 'hooks' })
+    if ($json.hooks.PSObject.Properties.Count -eq 0 -and $otherKeys.Count -eq 0) {
+        Remove-Item -Force $CURSOR_HOOKS_FILE -ErrorAction SilentlyContinue
+        return $true
+    }
+    if (-not ($json.PSObject.Properties.Name -contains 'version')) {
+        $json | Add-Member -NotePropertyName version -NotePropertyValue 1 -Force
+    }
+    $dir = Split-Path $CURSOR_HOOKS_FILE -Parent
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    ($json | ConvertTo-Json -Depth 20) | Set-Content -Path $CURSOR_HOOKS_FILE -Encoding UTF8
+    return $true
+}
+
+# Cursor hooks.json: send sound + the same gnome script on Cursor's equivalent events
+$cursorSendMap  = @{ "beforeSubmitPrompt" = "$CURSOR_HOOKS_DIR\play-send-sound.bat" }
+$cursorGnomeMap = @{
+    "afterAgentResponse" = "$CLAUDE_HOOK_DIR\gnome.bat"
+    "afterFileEdit"      = "$CLAUDE_HOOK_DIR\gnome.bat"
+    "preCompact"         = "$CLAUDE_HOOK_DIR\gnome.bat"
 }
 
 # ---------------------------------------------------------------------------
@@ -109,6 +161,13 @@ if ($DO_UNINSTALL) {
     Remove-Item -Force "$CURSOR_HOOKS_DIR\play-send-sound.ps1" -ErrorAction SilentlyContinue
     Remove-Item -Force "$CURSOR_HOOKS_DIR\play-send-sound.bat" -ErrorAction SilentlyContinue
     Remove-Item "$env:USERPROFILE\Desktop\Cursor (with sound).lnk" -ErrorAction SilentlyContinue
+    if (Test-Path $CURSOR_HOOKS_FILE) {
+        if ((Merge-CursorHooks -Mode 'remove' -Map $cursorSendMap) -and (Merge-CursorHooks -Mode 'remove' -Map $cursorGnomeMap)) {
+            Write-Host "  Removed Cursor hooks from hooks.json"
+        } else {
+            Write-Host "  Note: edit ~/.cursor/hooks.json to remove the wc3-sounds hooks" -ForegroundColor Yellow
+        }
+    }
     if (Test-Path $CLAUDE_SETTINGS) {
         if ((Merge-ClaudeHooks -Mode 'remove' -Map $claudeMap) -and (Merge-ClaudeHooks -Mode 'remove' -Map $gnomeMap)) {
             Write-Host "  Removed Claude Code hooks from settings.json"
@@ -119,7 +178,7 @@ if ($DO_UNINSTALL) {
     if (Get-Command code -ErrorAction SilentlyContinue) {
         & code --uninstall-extension johnholz.wc3-sounds 2>$null | Out-Null
     }
-    Write-Host "  Note: you may want to edit ~/.cursor/hooks.json to remove the beforeSubmitPrompt hook"
+    Remove-Item -Force $COPILOT_HOOKS_FILE -ErrorAction SilentlyContinue
     Write-Host "Done!" -ForegroundColor Green
     exit 0
 }
@@ -174,8 +233,8 @@ start /b powershell -NoProfile -WindowStyle Hidden -Command "(New-Object Media.S
 powershell -NoProfile -WindowStyle Hidden -Command "(New-Object Media.SoundPlayer '$SOUNDS_DIR\shutdown.wav').PlaySync()"
 "@ | Set-Content -Path $wrapperPath -Encoding ASCII
 
-# --- 3. Cursor send hook ---------------------------------------------------
-Write-Host "[3/5] Configuring Cursor send hook..."
+# --- 3. Cursor hooks (send sound + gnome) ----------------------------------
+Write-Host "[3/5] Configuring Cursor hooks..."
 $hookPs1 = "$CURSOR_HOOKS_DIR\play-send-sound.ps1"
 @"
 `$null = `$input | Out-Null  # drain stdin (required by Cursor)
@@ -188,20 +247,17 @@ $hookBat = "$CURSOR_HOOKS_DIR\play-send-sound.bat"
 powershell -NoProfile -WindowStyle Hidden -File "$hookPs1"
 "@ | Set-Content -Path $hookBat -Encoding ASCII
 
-if (-not (Test-Path $CURSOR_HOOKS_FILE)) {
-    @"
-{
-  "version": 1,
-  "hooks": {
-    "beforeSubmitPrompt": [
-      { "command": "$($hookBat -replace '\\','\\')" }
-    ]
-  }
-}
-"@ | Set-Content -Path $CURSOR_HOOKS_FILE -Encoding UTF8
-} elseif (-not (Select-String -Path $CURSOR_HOOKS_FILE -Pattern "play-send-sound" -Quiet)) {
-    Write-Host "  Note: ~/.cursor/hooks.json exists. Add a beforeSubmitPrompt hook pointing to:" -ForegroundColor Yellow
-    Write-Host "    $hookBat"
+if (Merge-CursorHooks -Mode 'add' -Map $cursorSendMap) {
+    Write-Host "  Cursor send hook installed (beforeSubmitPrompt)"
+    if ($GNOME) {
+        if (Merge-CursorHooks -Mode 'add' -Map $cursorGnomeMap) { Write-Host "  Barony gnome hooks installed (afterAgentResponse / afterFileEdit / preCompact)" }
+    } else {
+        if (Merge-CursorHooks -Mode 'remove' -Map $cursorGnomeMap) { Write-Host "  Barony gnome hooks removed (--no-gnome)" }
+    }
+} else {
+    Write-Host "  Note: ~/.cursor/hooks.json unparseable. Add these hooks manually:" -ForegroundColor Yellow
+    Write-Host "    beforeSubmitPrompt -> $hookBat"
+    if ($GNOME) { Write-Host "    afterAgentResponse, afterFileEdit, preCompact -> $CLAUDE_HOOK_DIR\gnome.bat" }
 }
 
 # --- 4. Claude Code hooks --------------------------------------------------
@@ -218,19 +274,36 @@ powershell -NoProfile -WindowStyle Hidden -File "$ps1"
 "@ | Set-Content -Path "$CLAUDE_HOOK_DIR\$evt.bat" -Encoding ASCII
 }
 
-# Barony gnome: one script for MessageDisplay / PostToolUse / PreCompact, plays a random clip.
+# Barony gnome: ONE script for every editor, plays a random clip.
+#   Claude Code : MessageDisplay (final flush) / PostToolUse (memory, plan, CLAUDE.md) / PreCompact
+#   Cursor      : afterAgentResponse / afterFileEdit (rules, plans, AGENTS.md, CLAUDE.md) / preCompact
+#   VS Code     : Copilot agent hooks read ~/.claude/settings.json -> PostToolUse (every tool: no per-message
+#                 event there, and VS Code ignores matchers) / PreCompact
 $gnomePs1 = "$CLAUDE_HOOK_DIR\gnome.ps1"
 if ($GNOME) {
     @"
-# wc3-sounds: Barony gnome - random squeak on Claude Code progress / memory / plan / CLAUDE.md / compact
+# wc3-sounds: Barony gnome - random squeak when the agent finishes a step, edits its instructions, or compacts
 `$in = [string](`$input | Out-String)
-if (`$in -match '"hook_event_name":\s*"PostToolUse"') {
-    # only memory / plan / CLAUDE.md writes (paths arrive JSON-escaped: \\ or /)
-    if (`$in -notmatch '"file_path":\s*"[^"]*([\\/]+\.claude[\\/]+projects[\\/]+[^"]*[\\/]+memory[\\/]+|[\\/]+\.claude[\\/]+plans[\\/]+|[\\/]+CLAUDE(\.local)?\.md")') { exit 0 }
-} elseif (`$in -match '"hook_event_name":\s*"MessageDisplay"') {
-    # fires per batch of streamed lines; only the last flush (final:true) counts -> one gnome per message
-    if (`$in -notmatch '"final":\s*true') { exit 0 }
+`$event = if (`$in -match '"hook_event_name":\s*"([A-Za-z]+)"') { `$Matches[1] } else { '' }
+# Every editor parses our stdout as JSON - except Claude Code's MessageDisplay, where stdout replaces the text on screen
+if (`$event -ne 'MessageDisplay') { Write-Output '{}' }
+switch (`$event) {
+    'MessageDisplay' {
+        # Claude Code: fires per batch of streamed lines; only the last flush (final:true) counts -> one gnome per message
+        if (`$in -notmatch '"final":\s*true') { exit 0 }
+    }
+    'PostToolUse' {
+        if (`$in -match '"tool_name":\s*"(Write|Edit|MultiEdit|NotebookEdit)"') {
+            # Claude Code: only memory / plan / CLAUDE.md writes (paths arrive JSON-escaped: \\ or /)
+            if (`$in -notmatch '"file_path":\s*"[^"]*([\\/]+\.claude[\\/]+projects[\\/]+[^"]*[\\/]+memory[\\/]+|[\\/]+\.claude[\\/]+plans[\\/]+|[\\/]+CLAUDE(\.local)?\.md")') { exit 0 }
+        }   # VS Code (camelCase tool names): every tool call is a step
+    }
+    'afterFileEdit' {
+        # Cursor: only rules / plans / agent instructions
+        if (`$in -notmatch '"file_path":\s*"[^"]*([\\/]+\.cursor[\\/]+rules[\\/]+|[\\/]+\.cursor[\\/]+plans[\\/]+|[\\/]+\.cursorrules"|[\\/]+AGENTS\.md"|[\\/]+CLAUDE(\.local)?\.md")') { exit 0 }
+    }
 }
+# afterAgentResponse (Cursor) and preCompact / PreCompact (all) always fall through to here
 # cooldown: 3 s > longest clip (2 s), so two gnomes never overlap
 # (WC3-voices-outrank-gnome priority is Linux/macOS only for now: these hooks cannot track playback)
 `$stamp = "$CONFIG_DIR\gnome.stamp"
@@ -250,7 +323,7 @@ powershell -NoProfile -WindowStyle Hidden -File "$gnomePs1"
 if (Merge-ClaudeHooks -Mode 'add' -Map $claudeMap) {
     Write-Host "  Claude Code hooks installed (SessionStart / UserPromptSubmit / Stop)"
     if ($GNOME) {
-        if (Merge-ClaudeHooks -Mode 'add' -Map $gnomeMap) { Write-Host "  Barony gnome hooks installed (MessageDisplay / PostToolUse / PreCompact)" }
+        if (Merge-ClaudeHooks -Mode 'add' -Map $gnomeMap) { Write-Host "  Barony gnome hooks installed (MessageDisplay / PostToolUse / PreCompact; VS Code Copilot reads these too)" }
     } else {
         if (Merge-ClaudeHooks -Mode 'remove' -Map $gnomeMap) { Write-Host "  Barony gnome hooks removed (--no-gnome)" }
     }
@@ -258,8 +331,24 @@ if (Merge-ClaudeHooks -Mode 'add' -Map $claudeMap) {
     Write-Host "  Note: settings.json unparseable; add the wc3-sounds .bat hooks manually." -ForegroundColor Yellow
 }
 
-# --- 5. VS Code extension --------------------------------------------------
+# --- 5. VS Code: Copilot agent hooks (send / "job's done" / gnome) + extension (startup/shutdown) ---
 Write-Host "[5/5] Configuring VS Code..."
+# VS Code reads Copilot-format hook files from ~/.copilot/hooks/*.json by default (Claude-format files only
+# behind chat.useClaudeHooks, which we don't touch). We own this file, so no merge is needed. No SessionStart:
+# the extension already plays the startup voice, and it would overlap the send voice on the first prompt.
+# VS Code ignores matchers, so PostToolUse -> gnome fires on every tool call (it has no per-message event).
+$copilotHooks = [ordered]@{
+    "UserPromptSubmit" = @([PSCustomObject]@{ type = 'command'; command = "$CLAUDE_HOOK_DIR\send.bat" })
+}
+if ($GNOME) {
+    $copilotHooks["PostToolUse"] = @([PSCustomObject]@{ type = 'command'; command = "$CLAUDE_HOOK_DIR\gnome.bat" })
+    $copilotHooks["PreCompact"]  = @([PSCustomObject]@{ type = 'command'; command = "$CLAUDE_HOOK_DIR\gnome.bat" })
+}
+$copilotHooks["Stop"] = @([PSCustomObject]@{ type = 'command'; command = "$CLAUDE_HOOK_DIR\shutdown.bat" })
+New-Item -ItemType Directory -Force -Path (Split-Path $COPILOT_HOOKS_FILE -Parent) | Out-Null
+([PSCustomObject]@{ hooks = [PSCustomObject]$copilotHooks } | ConvertTo-Json -Depth 10) | Set-Content -Path $COPILOT_HOOKS_FILE -Encoding UTF8
+$gnomeNote = if ($GNOME) { ", gnome" } else { "" }
+Write-Host "  Copilot agent hooks written to ~/.copilot/hooks/wc3-sounds.json (send, job's done$gnomeNote)"
 if (Get-Command code -ErrorAction SilentlyContinue) {
     $vsix = "$env:TEMP\wc3-sounds-$EXT_VERSION.vsix"
     try {
@@ -298,9 +387,12 @@ if (Test-Path $CURSOR_PATH) {
 Write-Host ""
 Write-Host "Done! Theme '$THEME' configured for:" -ForegroundColor Green
 Write-Host "  - Cursor      : startup, shutdown (wrapper) + send (hook)"
+if ($GNOME) { Write-Host "                  + Barony gnome: each agent message, rules/plans/AGENTS.md edits, compact (random clip)" }
 Write-Host "  - Claude Code : startup, send, shutdown (hooks)"
 if ($GNOME) { Write-Host "                  + Barony gnome: progress text, memory, plan, CLAUDE.md, compact (random clip)" }
 Write-Host "  - VS Code     : startup, shutdown (extension, if 'code' present)"
+$vsExtra = if ($GNOME) { ", gnome (every tool call, compact)" } else { "" }
+Write-Host "                  + send, job's done$vsExtra via Copilot agent hooks (Preview)"
 Write-Host ""
 Write-Host "Restart your editors to activate hooks."
 Write-Host "Commands:" -ForegroundColor Cyan

@@ -9,6 +9,7 @@ set -u
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
+export TMPDIR="$T"   # so a leaked mktemp file from the installer shows up here
 
 export HOME="$T/home"
 export WC3_REPO_URL="file://$REPO"
@@ -132,6 +133,18 @@ check  "MessageDisplay prints NOTHING (stdout would replace the text on screen)"
 silent "MessageDisplay final:false is silent"      '{"session_id":"s","hook_event_name":"MessageDisplay","turn_id":"t","message_id":"m","index":0,"final":false,"delta":"hi"}'
 plays  "PreCompact plays"                          '{"session_id":"s","hook_event_name":"PreCompact","trigger":"auto"}'
 
+echo "== gnome.sh: only known events play"
+silent "unregistered event (Stop) is silent"       '{"session_id":"s","hook_event_name":"Stop","stop_hook_active":false}'
+silent "empty stdin is silent"                     ''
+silent "garbage stdin is silent"                   '{"foo":"bar"}'
+silent "Claude Code MCP tool (name contains Edit) on an ordinary file is silent" '{"session_id":"s","transcript_path":"/t","hook_event_name":"PostToolUse","tool_name":"mcp__notion__EditPage","tool_input":{"file_path":"/w/src/app.js"}}'
+plays  "Claude Code MCP tool on a memory file plays" '{"session_id":"s","transcript_path":"/t","hook_event_name":"PostToolUse","tool_name":"mcp__fs__WriteFile","tool_input":{"file_path":"/h/.claude/projects/-w/memory/x.md"}}'
+
+echo "== gnome.sh: pretty-printed JSON (Cursor / VS Code may indent)"
+plays  "pretty-printed Cursor afterFileEdit plays"  "$(printf '{\n  "hook_event_name": "afterFileEdit",\n  "file_path": "/w/.cursor/rules/a.mdc",\n  "edits": []\n}')"
+plays  "pretty-printed VS Code PostToolUse plays"   "$(printf '{\n  "timestamp": "2026-09-14T13:00:00Z",\n  "hook_event_name": "PostToolUse",\n  "tool_name": "editFiles",\n  "tool_input": {\n    "filePath": "/w/src/app.js"\n  }\n}')"
+silent "pretty-printed Claude Code PostToolUse on an ordinary file is silent" "$(printf '{\n  "session_id": "s",\n  "hook_event_name": "PostToolUse",\n  "tool_name": "Edit",\n  "tool_input": {\n    "file_path": "/w/src/app.js"\n  }\n}')"
+
 echo "== gnome.sh: cooldown"
 run_gnome '{"hook_event_name":"afterAgentResponse","text":"1"}'
 printf '%s' '{"hook_event_name":"afterAgentResponse","text":"2"}' | bash "$GNOME_SH" >/dev/null
@@ -140,12 +153,12 @@ check "two responses within 3 s -> one clip" test "$(cat "$WC3_TEST_LOG" 2>/dev/
 
 echo "== Cursor send hook: WC3 voice outranks a waiting gnome"
 rm -f "$WC3_TEST_LOG" "$CONFIG_DIR/wc3.pid"
-setsid sleep 30 </dev/null >/dev/null 2>&1 &
-FAKE_GNOME=$!
+# a sleeper in its own process group, like the real gnome (set -m); portable (no setsid on macOS)
+FAKE_GNOME=$(bash -c 'set -m; sleep 30 </dev/null >/dev/null 2>&1 & echo $!')
 echo "$FAKE_GNOME tok" > "$CONFIG_DIR/gnome.pid"
 printf '%s' '{"hook_event_name":"beforeSubmitPrompt","prompt":"hi"}' | bash "$SEND_SH" > "$T/send.out"
 sleep 0.3
-check "send hook stops the gnome"           test ! -d "/proc/$FAKE_GNOME"
+check "send hook stops the gnome"           bash -c "! kill -0 $FAKE_GNOME 2>/dev/null"
 check "send hook records its pid for the gnome to wait on" test -s "$CONFIG_DIR/wc3.pid"
 check "send hook still answers continue:true" grep -q '"continue": *true' "$T/send.out"
 check "send hook plays send.wav"            grep -q 'send.wav' "$WC3_TEST_LOG"
@@ -168,6 +181,24 @@ check "VS Code: send hook present"         test "$(jqv '.hooks.UserPromptSubmit 
 check "VS Code: no gnome hooks"            test "$(jqv '[.hooks[][] | .command] | map(select(endswith("gnome.sh"))) | length')" = "0"
 check "Claude: no gnome hooks"             test "$(jqc '[.hooks[][] | .hooks[].command] | map(select(endswith("gnome.sh"))) | length')" = "0"
 bash "$REPO/install.sh" --uninstall </dev/null >/dev/null 2>&1
+
+echo "== Cursor hooks.json absent before install -> created -> gone after uninstall"
+rm -f "$CURSOR_HOOKS"
+bash "$REPO/install.sh" --theme human </dev/null >/dev/null 2>&1 || fail "install exit 0"
+check "created with version 1"             test "$(jqh '.version')" = "1"
+bash "$REPO/install.sh" --uninstall </dev/null >/dev/null 2>&1
+check "file removed (nothing of the user's was in it)" test ! -e "$CURSOR_HOOKS"
+check "empty ~/.copilot/hooks dir removed" test ! -d "$HOME/.copilot/hooks"
+
+echo "== Cursor hooks.json unparseable -> left alone, installer says so and still finishes"
+printf '{ this is not json' > "$CURSOR_HOOKS"
+bash "$REPO/install.sh" --theme human </dev/null >"$T/install4.log" 2>&1; rc=$?
+check "installer exit 0"                   test "$rc" = "0"
+check "file untouched"                     test "$(cat "$CURSOR_HOOKS")" = "{ this is not json"
+check "installer prints a note"            grep -q 'could not update' "$T/install4.log"
+check "installer does not claim success"   bash -c "! grep -q 'Cursor send hook installed' '$T/install4.log'"
+check "no temp file left in \$TMPDIR"      bash -c "! ls '$T'/tmp.* >/dev/null 2>&1"
+rm -f "$CURSOR_HOOKS"
 
 echo ""
 echo "$PASS passed, $FAIL failed"

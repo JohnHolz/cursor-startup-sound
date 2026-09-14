@@ -81,10 +81,10 @@ function Merge-ClaudeHooks {
             $json.hooks.PSObject.Properties.Remove($event)
         }
     }
-    if ($json.hooks.PSObject.Properties.Count -eq 0) { $json.PSObject.Properties.Remove('hooks') }
+    if (@($json.hooks.PSObject.Properties).Count -eq 0) { $json.PSObject.Properties.Remove('hooks') }
     $dir = Split-Path $CLAUDE_SETTINGS -Parent
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-    ($json | ConvertTo-Json -Depth 20) | Set-Content -Path $CLAUDE_SETTINGS -Encoding UTF8
+    [IO.File]::WriteAllText($CLAUDE_SETTINGS, ($json | ConvertTo-Json -Depth 20), (New-Object Text.UTF8Encoding $false))  # no BOM
     return $true
 }
 
@@ -130,7 +130,7 @@ function Merge-CursorHooks {
         }
     }
     $otherKeys = @($json.PSObject.Properties.Name | Where-Object { $_ -ne 'version' -and $_ -ne 'hooks' })
-    if ($json.hooks.PSObject.Properties.Count -eq 0 -and $otherKeys.Count -eq 0) {
+    if (@($json.hooks.PSObject.Properties).Count -eq 0 -and $otherKeys.Count -eq 0) {
         Remove-Item -Force $CURSOR_HOOKS_FILE -ErrorAction SilentlyContinue
         return $true
     }
@@ -139,7 +139,7 @@ function Merge-CursorHooks {
     }
     $dir = Split-Path $CURSOR_HOOKS_FILE -Parent
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-    ($json | ConvertTo-Json -Depth 20) | Set-Content -Path $CURSOR_HOOKS_FILE -Encoding UTF8
+    [IO.File]::WriteAllText($CURSOR_HOOKS_FILE, ($json | ConvertTo-Json -Depth 20), (New-Object Text.UTF8Encoding $false))  # no BOM
     return $true
 }
 
@@ -179,6 +179,8 @@ if ($DO_UNINSTALL) {
         & code --uninstall-extension johnholz.wc3-sounds 2>$null | Out-Null
     }
     Remove-Item -Force $COPILOT_HOOKS_FILE -ErrorAction SilentlyContinue
+    $copilotDir = Split-Path $COPILOT_HOOKS_FILE -Parent
+    if ((Test-Path $copilotDir) -and -not (Get-ChildItem $copilotDir -Force)) { Remove-Item $copilotDir -Force -ErrorAction SilentlyContinue }
     Write-Host "Done!" -ForegroundColor Green
     exit 0
 }
@@ -255,7 +257,7 @@ if (Merge-CursorHooks -Mode 'add' -Map $cursorSendMap) {
         if (Merge-CursorHooks -Mode 'remove' -Map $cursorGnomeMap) { Write-Host "  Barony gnome hooks removed (--no-gnome)" }
     }
 } else {
-    Write-Host "  Note: ~/.cursor/hooks.json unparseable. Add these hooks manually:" -ForegroundColor Yellow
+    Write-Host "  Note: could not update ~/.cursor/hooks.json (not valid JSON). Add these hooks manually:" -ForegroundColor Yellow
     Write-Host "    beforeSubmitPrompt -> $hookBat"
     if ($GNOME) { Write-Host "    afterAgentResponse, afterFileEdit, preCompact -> $CLAUDE_HOOK_DIR\gnome.bat" }
 }
@@ -277,33 +279,37 @@ powershell -NoProfile -WindowStyle Hidden -File "$ps1"
 # Barony gnome: ONE script for every editor, plays a random clip.
 #   Claude Code : MessageDisplay (final flush) / PostToolUse (memory, plan, CLAUDE.md) / PreCompact
 #   Cursor      : afterAgentResponse / afterFileEdit (rules, plans, AGENTS.md, CLAUDE.md) / preCompact
-#   VS Code     : Copilot agent hooks read ~/.claude/settings.json -> PostToolUse (every tool: no per-message
-#                 event there, and VS Code ignores matchers) / PreCompact
+#   VS Code     : Copilot agent hooks (~/.copilot/hooks/wc3-sounds.json) -> PostToolUse (every tool: no
+#                 per-message event there, and VS Code ignores matchers) / PreCompact
 $gnomePs1 = "$CLAUDE_HOOK_DIR\gnome.ps1"
 if ($GNOME) {
     @"
 # wc3-sounds: Barony gnome - random squeak when the agent finishes a step, edits its instructions, or compacts
 `$in = [string](`$input | Out-String)
-`$event = if (`$in -match '"hook_event_name":\s*"([A-Za-z]+)"') { `$Matches[1] } else { '' }
+`$event = if (`$in -cmatch '"hook_event_name":\s*"([A-Za-z]+)"') { `$Matches[1] } else { '' }
 # Every editor parses our stdout as JSON - except Claude Code's MessageDisplay, where stdout replaces the text on screen
 if (`$event -ne 'MessageDisplay') { Write-Output '{}' }
 switch (`$event) {
     'MessageDisplay' {
         # Claude Code: fires per batch of streamed lines; only the last flush (final:true) counts -> one gnome per message
-        if (`$in -notmatch '"final":\s*true') { exit 0 }
+        if (`$in -cnotmatch '"final":\s*true') { exit 0 }
     }
     'PostToolUse' {
-        if (`$in -match '"tool_name":\s*"(Write|Edit|MultiEdit|NotebookEdit)"') {
-            # Claude Code: only memory / plan / CLAUDE.md writes (paths arrive JSON-escaped: \\ or /)
-            if (`$in -notmatch '"file_path":\s*"[^"]*([\\/]+\.claude[\\/]+projects[\\/]+[^"]*[\\/]+memory[\\/]+|[\\/]+\.claude[\\/]+plans[\\/]+|[\\/]+CLAUDE(\.local)?\.md")') { exit 0 }
-        }   # VS Code (camelCase tool names): every tool call is a step
+        if (`$in -cmatch '"tool_name":\s*"(Write|Edit|MultiEdit|NotebookEdit|mcp__[^"]*)"') {
+            # Claude Code (builtin file tools, or an MCP tool its Write|Edit matcher let through): only memory / plan / CLAUDE.md writes
+            # (paths arrive JSON-escaped: \\ or /)
+            if (`$in -cnotmatch '"file_path":\s*"[^"]*([\\/]+\.claude[\\/]+projects[\\/]+[^"]*[\\/]+memory[\\/]+|[\\/]+\.claude[\\/]+plans[\\/]+|[\\/]+CLAUDE(\.local)?\.md")') { exit 0 }
+        }   # otherwise VS Code (camelCase tool names, no per-message event): every tool call is a step
     }
     'afterFileEdit' {
         # Cursor: only rules / plans / agent instructions
-        if (`$in -notmatch '"file_path":\s*"[^"]*([\\/]+\.cursor[\\/]+rules[\\/]+|[\\/]+\.cursor[\\/]+plans[\\/]+|[\\/]+\.cursorrules"|[\\/]+AGENTS\.md"|[\\/]+CLAUDE(\.local)?\.md")') { exit 0 }
+        if (`$in -cnotmatch '"file_path":\s*"[^"]*([\\/]+\.cursor[\\/]+rules[\\/]+|[\\/]+\.cursor[\\/]+plans[\\/]+|[\\/]+\.cursorrules"|[\\/]+AGENTS\.md"|[\\/]+CLAUDE(\.local)?\.md")') { exit 0 }
     }
+    'afterAgentResponse' { }   # Cursor: message done -> always squeak
+    'preCompact'         { }   # compaction (Cursor)
+    'PreCompact'         { }   # compaction (Claude Code / VS Code)
+    default              { exit 0 }   # unknown event, empty or malformed input: stay quiet
 }
-# afterAgentResponse (Cursor) and preCompact / PreCompact (all) always fall through to here
 # cooldown: 3 s > longest clip (2 s), so two gnomes never overlap
 # (WC3-voices-outrank-gnome priority is Linux/macOS only for now: these hooks cannot track playback)
 `$stamp = "$CONFIG_DIR\gnome.stamp"
@@ -323,7 +329,7 @@ powershell -NoProfile -WindowStyle Hidden -File "$gnomePs1"
 if (Merge-ClaudeHooks -Mode 'add' -Map $claudeMap) {
     Write-Host "  Claude Code hooks installed (SessionStart / UserPromptSubmit / Stop)"
     if ($GNOME) {
-        if (Merge-ClaudeHooks -Mode 'add' -Map $gnomeMap) { Write-Host "  Barony gnome hooks installed (MessageDisplay / PostToolUse / PreCompact; VS Code Copilot reads these too)" }
+        if (Merge-ClaudeHooks -Mode 'add' -Map $gnomeMap) { Write-Host "  Barony gnome hooks installed (MessageDisplay / PostToolUse / PreCompact)" }
     } else {
         if (Merge-ClaudeHooks -Mode 'remove' -Map $gnomeMap) { Write-Host "  Barony gnome hooks removed (--no-gnome)" }
     }
@@ -346,7 +352,7 @@ if ($GNOME) {
 }
 $copilotHooks["Stop"] = @([PSCustomObject]@{ type = 'command'; command = "$CLAUDE_HOOK_DIR\shutdown.bat" })
 New-Item -ItemType Directory -Force -Path (Split-Path $COPILOT_HOOKS_FILE -Parent) | Out-Null
-([PSCustomObject]@{ hooks = [PSCustomObject]$copilotHooks } | ConvertTo-Json -Depth 10) | Set-Content -Path $COPILOT_HOOKS_FILE -Encoding UTF8
+[IO.File]::WriteAllText($COPILOT_HOOKS_FILE, ([PSCustomObject]@{ hooks = [PSCustomObject]$copilotHooks } | ConvertTo-Json -Depth 10), (New-Object Text.UTF8Encoding $false))  # no BOM
 $gnomeNote = if ($GNOME) { ", gnome" } else { "" }
 Write-Host "  Copilot agent hooks written to ~/.copilot/hooks/wc3-sounds.json (send, job's done$gnomeNote)"
 if (Get-Command code -ErrorAction SilentlyContinue) {
@@ -361,7 +367,7 @@ if (Get-Command code -ErrorAction SilentlyContinue) {
             try {
                 if (Test-Path $vscodeSettings) { $s = Get-Content $vscodeSettings -Raw | ConvertFrom-Json } else { $s = [PSCustomObject]@{} }
                 $s | Add-Member -NotePropertyName "wc3Sounds.theme" -NotePropertyValue $THEME -Force
-                ($s | ConvertTo-Json -Depth 20) | Set-Content -Path $vscodeSettings -Encoding UTF8
+                [IO.File]::WriteAllText($vscodeSettings, ($s | ConvertTo-Json -Depth 20), (New-Object Text.UTF8Encoding $false))  # no BOM
             } catch { }
         }
     } catch {

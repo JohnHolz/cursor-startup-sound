@@ -28,7 +28,9 @@ Works in **Cursor**, **VS Code**, and **Claude Code** — installable via **CLI*
 \* VS Code: send, *"Job's done"* after each answer, and the gnome ride on **Copilot agent hooks** (Preview,
 `chat.useHooks`, on by default) — they play in Copilot's agent mode, not in other chat extensions. VS Code has no
 per-message hook, so the gnome there squeaks on every tool call instead. The extension's optional send
-keybinding (off by default) stays as a fallback for other chats.
+keybinding (off by default) stays as a fallback for other chats. If you have turned on `chat.useClaudeHooks`,
+VS Code also runs the Claude Code hooks from `~/.claude/settings.json` and every voice would play twice; in that
+case delete `~/.copilot/hooks/wc3-sounds.json` and let the Claude Code hooks do the work.
 
 ---
 

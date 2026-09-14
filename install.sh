@@ -118,9 +118,8 @@ with open(path, "w") as f:
 PYEOF
         return $?
     elif command -v jq >/dev/null 2>&1; then
-        local tmp; tmp="$(mktemp)"
-        [ -f "$CLAUDE_SETTINGS" ] || echo '{}' > "$CLAUDE_SETTINGS"
-        jq --arg mode "$mode" --argjson map "$map" '
+        local out
+        out="$( { [ -f "$CLAUDE_SETTINGS" ] && cat "$CLAUDE_SETTINGS" || echo '{}'; } | jq --arg mode "$mode" --argjson map "$map" '
           .hooks //= {} |
           reduce ($map | to_entries[]) as $e (.;
             .hooks[$e.key] = (
@@ -133,7 +132,9 @@ PYEOF
             if (.hooks[$e.key] | length) == 0 then del(.hooks[$e.key]) else . end
           ) |
           if (.hooks | length) == 0 then del(.hooks) else . end
-        ' "$CLAUDE_SETTINGS" > "$tmp" && mv "$tmp" "$CLAUDE_SETTINGS"
+        ')" || return 3   # unparseable -> caller prints manual steps
+        mkdir -p "$(dirname "$CLAUDE_SETTINGS")"
+        printf '%s\n' "$out" > "$CLAUDE_SETTINGS"
         return 0
     fi
     return 1  # no merger available
@@ -189,9 +190,8 @@ with open(path, "w") as f:
 PYEOF
         return $?
     elif command -v jq >/dev/null 2>&1; then
-        local tmp; tmp="$(mktemp)"
-        [ -f "$CURSOR_HOOKS_FILE" ] || echo '{}' > "$CURSOR_HOOKS_FILE"
-        jq --arg mode "$mode" --argjson map "$map" '
+        local out
+        out="$( { [ -f "$CURSOR_HOOKS_FILE" ] && cat "$CURSOR_HOOKS_FILE" || echo '{}'; } | jq --arg mode "$mode" --argjson map "$map" '
           .version //= 1 | .hooks //= {} |
           reduce ($map | to_entries[]) as $e (.;
             .hooks[$e.key] = (
@@ -199,8 +199,15 @@ PYEOF
               + (if $mode == "add" then [{command: $e.value}] else [] end)
             ) |
             if (.hooks[$e.key] | length) == 0 then del(.hooks[$e.key]) else . end
-          )
-        ' "$CURSOR_HOOKS_FILE" > "$tmp" && mv "$tmp" "$CURSOR_HOOKS_FILE"
+          ) |
+          if (.hooks | length) == 0 and ((keys - ["version", "hooks"]) | length) == 0 then empty else . end
+        ')" || return 3   # unparseable -> caller prints manual steps
+        if [ -z "$out" ]; then
+            rm -f "$CURSOR_HOOKS_FILE"   # nothing but our hooks was in it
+        else
+            mkdir -p "$(dirname "$CURSOR_HOOKS_FILE")"
+            printf '%s\n' "$out" > "$CURSOR_HOOKS_FILE"
+        fi
         return 0
     fi
     return 1  # no merger available
@@ -233,7 +240,7 @@ if [ "$DO_UNINSTALL" = "1" ]; then
         if merge_cursor remove "$CURSOR_SEND_MAP" && merge_cursor remove "$CURSOR_GNOME_MAP"; then
             echo "  Removed Cursor hooks from hooks.json"
         else
-            echo "  Note: edit ~/.cursor/hooks.json to remove the wc3-sounds hooks (no python3/jq found)"
+            echo "  Note: edit ~/.cursor/hooks.json to remove the wc3-sounds hooks (needs python3 or jq, and a valid JSON file)"
         fi
     fi
     if [ "$PLATFORM" = "linux" ]; then
@@ -246,7 +253,7 @@ if [ "$DO_UNINSTALL" = "1" ]; then
         if merge_claude remove "$BASE_MAP" && merge_claude remove "$GNOME_MAP"; then
             echo "  Removed Claude Code hooks from settings.json"
         else
-            echo "  Note: edit ~/.claude/settings.json to remove the wc3-sounds hooks (no python3/jq found)"
+            echo "  Note: edit ~/.claude/settings.json to remove the wc3-sounds hooks (needs python3 or jq, and a valid JSON file)"
         fi
     fi
     # VS Code extension + Copilot hook file
@@ -254,6 +261,7 @@ if [ "$DO_UNINSTALL" = "1" ]; then
         code --uninstall-extension johnholz.wc3-sounds >/dev/null 2>&1 || true
     fi
     rm -f "$COPILOT_HOOKS_FILE"
+    rmdir "$(dirname "$COPILOT_HOOKS_FILE")" 2>/dev/null || true
     rm -rf "$CONFIG_DIR"
     echo "Done!"
     exit 0
@@ -355,7 +363,7 @@ SND="$SOUNDS_DIR/send.wav"
 # Only one voice at a time: WC3 voices outrank the gnome, so stop a gnome that is playing (or waiting its turn)
 G="\$(cut -d' ' -f1 "$CONFIG_DIR/gnome.pid" 2>/dev/null)"
 [ -n "\$G" ] && kill -0 "\$G" 2>/dev/null && kill -- -"\$G" 2>/dev/null; rm -f "$CONFIG_DIR/gnome.pid"
-$( [ "$PLATFORM" = "linux" ] && echo '( paplay "$SND" 2>/dev/null || aplay "$SND" 2>/dev/null ) &' || echo '( afplay "$SND" 2>/dev/null ) &' )
+$( [ "$PLATFORM" = "linux" ] && echo '( paplay "$SND" 2>/dev/null || aplay "$SND" 2>/dev/null ) >/dev/null 2>&1 </dev/null &' || echo '( afplay "$SND" 2>/dev/null ) >/dev/null 2>&1 </dev/null &' )
 echo \$! > "$CONFIG_DIR/wc3.pid"
 echo '{"continue": true}'
 EOF
@@ -369,7 +377,7 @@ if merge_cursor add "$CURSOR_SEND_MAP"; then
         merge_cursor remove "$CURSOR_GNOME_MAP" && echo "  Barony gnome hooks removed (--no-gnome)"
     fi
 else
-    echo "  Note: no python3/jq found. Add these to ~/.cursor/hooks.json under \"hooks\":"
+    echo "  Note: could not update ~/.cursor/hooks.json (needs python3 or jq, and a valid JSON file). Add these under \"hooks\":"
     echo "    beforeSubmitPrompt -> $CURSOR_HOOKS_DIR/play-send-sound.sh"
     if [ "$GNOME" = "1" ]; then
         echo "    afterAgentResponse, afterFileEdit, preCompact -> $CLAUDE_HOOK_DIR/gnome.sh"
@@ -386,7 +394,7 @@ SND="$SOUNDS_DIR/$evt.wav"
 # Only one voice at a time: WC3 voices outrank the gnome, so stop a gnome that is playing (or waiting its turn)
 G="\$(cut -d' ' -f1 "$CONFIG_DIR/gnome.pid" 2>/dev/null)"
 [ -n "\$G" ] && kill -0 "\$G" 2>/dev/null && kill -- -"\$G" 2>/dev/null; rm -f "$CONFIG_DIR/gnome.pid"
-$( [ "$PLATFORM" = "linux" ] && echo '( paplay "$SND" 2>/dev/null || aplay "$SND" 2>/dev/null ) &' || echo '( afplay "$SND" 2>/dev/null ) &' )
+$( [ "$PLATFORM" = "linux" ] && echo '( paplay "$SND" 2>/dev/null || aplay "$SND" 2>/dev/null ) >/dev/null 2>&1 </dev/null &' || echo '( afplay "$SND" 2>/dev/null ) >/dev/null 2>&1 </dev/null &' )
 echo \$! > "$CONFIG_DIR/wc3.pid"
 exit 0
 EOF
@@ -396,8 +404,8 @@ done
 # Barony gnome: ONE script for every editor, plays a random clip.
 #   Claude Code : MessageDisplay (final flush) / PostToolUse (memory, plan, CLAUDE.md) / PreCompact
 #   Cursor      : afterAgentResponse / afterFileEdit (rules, plans, AGENTS.md, CLAUDE.md) / preCompact
-#   VS Code     : Copilot agent hooks read ~/.claude/settings.json -> PostToolUse (every tool: no per-message
-#                 event there, and VS Code ignores matchers) / PreCompact
+#   VS Code     : Copilot agent hooks (~/.copilot/hooks/wc3-sounds.json) -> PostToolUse (every tool: no
+#                 per-message event there, and VS Code ignores matchers) / PreCompact
 if [ "$GNOME" = "1" ]; then
     cat > "$CLAUDE_HOOK_DIR/gnome.sh" << EOF
 #!/bin/bash
@@ -413,15 +421,16 @@ case "\$EVENT" in
     # Claude Code: fires per batch of streamed lines; only the last flush (final:true) counts -> one gnome per message
     printf '%s' "\$INPUT" | grep -qE '"final": *true' || exit 0 ;;
   PostToolUse)
-    if printf '%s' "\$INPUT" | grep -qE '"tool_name": *"(Write|Edit|MultiEdit|NotebookEdit)"'; then
-      # Claude Code: only memory / plan / CLAUDE.md writes
+    if printf '%s' "\$INPUT" | grep -qE '"tool_name": *"(Write|Edit|MultiEdit|NotebookEdit|mcp__[^"]*)"'; then
+      # Claude Code (builtin file tools, or an MCP tool its Write|Edit matcher let through): only memory / plan / CLAUDE.md writes
       printf '%s' "\$INPUT" | grep -qE '"file_path": *"[^"]*(/\\.claude/projects/[^"]*/memory/|/\\.claude/plans/|/CLAUDE(\\.local)?\\.md")' || exit 0
-    fi ;;  # VS Code (camelCase tool names): every tool call is a step
+    fi ;;  # otherwise VS Code (camelCase tool names, no per-message event): every tool call is a step
   afterFileEdit)
     # Cursor: only rules / plans / agent instructions
     printf '%s' "\$INPUT" | grep -qE '"file_path": *"[^"]*(/\\.cursor/rules/|/\\.cursor/plans/|/\\.cursorrules"|/AGENTS\\.md"|/CLAUDE(\\.local)?\\.md")' || exit 0 ;;
+  afterAgentResponse|preCompact|PreCompact) ;;   # Cursor message done; compaction (all editors): always squeak
+  *) exit 0 ;;                                   # unknown event, empty or malformed input: stay quiet
 esac
-# afterAgentResponse (Cursor) and preCompact / PreCompact (all) always fall through to here
 # cooldown: 3 s > longest clip (2 s), so two gnomes never overlap
 now=\$(date +%s); last=\$(cat "\$STAMP" 2>/dev/null || echo 0)
 [ "\$((now - last))" -lt 3 ] && exit 0
@@ -440,7 +449,7 @@ set -m   # own process group, so a WC3 hook can stop us (player included) with k
   [ "\$(cat "$CONFIG_DIR/gnome.token" 2>/dev/null)" = "\$TOKEN" ] || exit 0   # a newer gnome took over
   $( [ "$PLATFORM" = "linux" ] && echo 'paplay "$SND" 2>/dev/null || aplay "$SND" 2>/dev/null' || echo 'afplay "$SND" 2>/dev/null' )
   [ "\$(cut -d' ' -f2 "$CONFIG_DIR/gnome.pid" 2>/dev/null)" = "\$TOKEN" ] && rm -f "$CONFIG_DIR/gnome.pid"
-) &
+) >/dev/null 2>&1 </dev/null &
 echo "\$! \$TOKEN" > "$CONFIG_DIR/gnome.pid"
 exit 0
 EOF
@@ -452,12 +461,12 @@ fi
 if merge_claude add "$BASE_MAP"; then
     echo "  Claude Code hooks installed (SessionStart / UserPromptSubmit / Stop)"
     if [ "$GNOME" = "1" ]; then
-        merge_claude add "$GNOME_MAP" && echo "  Barony gnome hooks installed (MessageDisplay / PostToolUse / PreCompact; VS Code Copilot reads these too)"
+        merge_claude add "$GNOME_MAP" && echo "  Barony gnome hooks installed (MessageDisplay / PostToolUse / PreCompact)"
     else
         merge_claude remove "$GNOME_MAP" && echo "  Barony gnome hooks removed (--no-gnome)"
     fi
 else
-    echo "  Note: no python3/jq found. Add these to ~/.claude/settings.json under \"hooks\":"
+    echo "  Note: could not update ~/.claude/settings.json (needs python3 or jq, and a valid JSON file). Add these under \"hooks\":"
     echo "    SessionStart -> $CLAUDE_HOOK_DIR/startup.sh"
     echo "    UserPromptSubmit -> $CLAUDE_HOOK_DIR/send.sh"
     echo "    Stop -> $CLAUDE_HOOK_DIR/shutdown.sh"
@@ -512,6 +521,7 @@ PYEOF
     else
         echo "  VS Code extension .vsix not available yet (will be on the GitHub release)."
     fi
+    rm -f "$VSIX_TMP"
 else
     echo "  VS Code ('code' CLI) not found; skipping. Install the .vsix manually if you use VS Code."
 fi
